@@ -1,23 +1,29 @@
 /**
  * Client API Adapter
  * Menghubungkan antarmuka frontend ke:
- * 1. Database Supabase PostgreSQL secara langsung (Direct Mode - untuk GitHub Pages & hosting statis tanpa backend)
- * 2. Backend REST API Node.js / Express (jika berjalan di localhost atau server mandiri)
- * 3. Google Apps Script (jika dijalankan di lingkungan Google Apps Script Web App)
+ * 1. Google Apps Script Web App (Mode 'appscript' / GAS REST API via fetch)
+ * 2. Lingkungan Internal Apps Script (via native google.script.run)
+ * 3. Database Supabase PostgreSQL secara langsung (Direct Mode - untuk hosting statis tanpa backend)
+ * 4. Backend REST API Node.js / Express (Mode 'api' di localhost)
  */
 (() => {
   'use strict';
 
   const config = window.APP_CONFIG || {
-    MODE: 'auto',
+    MODE: 'appscript',
+    GAS_URL: '',
     API_BASE_URL: 'http://localhost:5000/api',
     SUPABASE_URL: 'https://tayybadwfypmedjixemd.supabase.co',
     SUPABASE_KEY: ''
   };
 
   /**
-   * Helper Pengambilan Kredensial Supabase
+   * Helper Pengambilan Kredensial & URL
    */
+  const getGasUrl = () => {
+    return (localStorage.getItem('gas_url') || config.GAS_URL || '').trim();
+  };
+
   const getSupabaseUrl = () => {
     return (localStorage.getItem('supabase_url') || config.SUPABASE_URL || 'https://tayybadwfypmedjixemd.supabase.co').replace(/\/$/, '');
   };
@@ -27,15 +33,34 @@
   };
 
   /**
-   * Deteksi apakah harus menggunakan mode langsung ke Supabase (misal di GitHub Pages)
+   * Helper Request ke Google Apps Script Web App (POST dengan text/plain anti-CORS preflight)
    */
-  const shouldUseDirectSupabase = () => {
-    if (config.MODE === 'direct') return true;
-    if (config.MODE === 'api') return false;
-    // Auto mode: jika bukan di localhost/127.0.0.1 (misal di *.github.io), gunakan direct Supabase!
-    const host = window.location.hostname;
-    return host !== 'localhost' && host !== '127.0.0.1';
-  };
+  async function callGasWebApi(action, args = []) {
+    const gasUrl = getGasUrl();
+    if (!gasUrl) {
+      throw new Error('Google Apps Script Web App URL belum diisi. Masukkan URL Web App di menu Pengaturan atau di js/config.js.');
+    }
+
+    const payload = JSON.stringify({ action, args });
+    const res = await fetch(gasUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8' // WAJIB text/plain agar tidak memicu CORS OPTIONS preflight ditolak GAS
+      },
+      body: payload
+    });
+
+    if (!res.ok) {
+      const errTxt = await res.text().catch(() => '');
+      throw new Error(errTxt || `GAS Web App HTTP ${res.status}: ${res.statusText}`);
+    }
+
+    const data = await res.json().catch(() => ({}));
+    if (!data.success) {
+      throw new Error(data.message || 'Eksekusi Google Apps Script gagal.');
+    }
+    return data;
+  }
 
   /**
    * Helper SHA-256 Hash di Browser via Web Crypto API
@@ -123,7 +148,7 @@
   }
 
   /**
-   * Handler Direct Supabase untuk seluruh aksi sistem
+   * Handler Direct Supabase untuk seluruh aksi sistem (Fallback)
    */
   async function executeDirectSupabase(name, ...args) {
     const sUrl = getSupabaseUrl();
@@ -138,7 +163,7 @@
               configured: false,
               connectionOk: false,
               url: sUrl,
-              connMessage: 'Supabase Key belum dimasukkan. Buka menu Pengaturan untuk menghubungkan database.'
+              connMessage: 'Supabase Key belum dimasukkan. Buka menu Pengaturan.'
             }
           };
         }
@@ -150,7 +175,7 @@
               configured: true,
               connectionOk: true,
               url: sUrl,
-              connMessage: 'Terhubung langsung ke database Supabase PostgreSQL.'
+              connMessage: 'Terhubung ke database Supabase PostgreSQL.'
             }
           };
         } catch (err) {
@@ -174,7 +199,6 @@
         const cleanUrl = url.trim().replace(/\/$/, '');
         const cleanKey = key.trim();
 
-        // Uji koneksi dengan kredensial baru
         const testRes = await fetch(`${cleanUrl}/rest/v1/material_raw?select=id&limit=1`, {
           headers: {
             'apikey': cleanKey,
@@ -187,7 +211,6 @@
           throw new Error('Gagal terhubung ke Supabase: ' + (errText || testRes.statusText));
         }
 
-        // Simpan ke localStorage
         localStorage.setItem('supabase_url', cleanUrl);
         localStorage.setItem('supabase_key', cleanKey);
 
@@ -200,27 +223,20 @@
 
       case 'testSupabaseConnection': {
         await supabaseRequest('material_raw?select=id&limit=1');
-        return {
-          success: true,
-          message: 'Koneksi ke Supabase PostgreSQL BERHASIL!'
-        };
+        return { success: true, message: 'Koneksi ke Supabase PostgreSQL BERHASIL!' };
       }
 
       case 'loginUser': {
         const [username, password] = args;
         if (!username || !password) throw new Error('Username dan password wajib diisi.');
-        if (!sKey) throw new Error('Database Supabase belum terhubung. Buka menu Pengaturan dan masukkan Supabase Service Role Key.');
-
         const uName = username.trim().toLowerCase();
         const pHash = await sha256Hex(password);
 
         const users = await supabaseRequest(`app_users?username=eq.${encodeURIComponent(uName)}&is_active=eq.true&limit=1`);
         if (!users || !users.length) throw new Error('Username atau password salah.');
-
         const user = users[0];
         if (user.password_hash !== pHash) throw new Error('Username atau password salah.');
 
-        // Ambil hak akses peran
         let permissions = null;
         try {
           const perms = await supabaseRequest(`app_role_permissions?role=eq.${encodeURIComponent(user.role)}&limit=1`);
@@ -256,20 +272,18 @@
           });
         } catch (_) {}
 
-        const guestRole = allRoles.find(r => r.role === 'GUEST') || {
-          role: 'GUEST',
-          allowed_menus: ['dashboard', 'materials', 'similarity', 'reports'],
-          can_upload: false,
-          can_run_ai: false,
-          can_merge: false,
-          can_manage_settings: false
-        };
-
         return {
           success: true,
           data: {
             allRoles,
-            guestPermissions: guestRole
+            guestPermissions: allRoles.find(r => r.role === 'GUEST') || {
+              role: 'GUEST',
+              allowed_menus: ['dashboard', 'materials', 'similarity', 'reports'],
+              can_upload: false,
+              can_run_ai: false,
+              can_merge: false,
+              can_manage_settings: false
+            }
           }
         };
       }
@@ -280,7 +294,6 @@
           if (rows && rows.length) return { success: true, data: rows[0] };
         } catch (_) {}
 
-        // Fallback hitung manual
         const [allMat, allDup, allSim] = await Promise.all([
           supabaseRequest('material_raw?select=id,status,stock_qty,stock_value,material_group'),
           supabaseRequest('duplicate_analysis?select=potential_saving,review_status'),
@@ -357,7 +370,6 @@
           };
         });
 
-        // Insert upload history
         try {
           await supabaseRequest('upload_history', {
             method: 'POST',
@@ -370,7 +382,6 @@
           });
         } catch (_) {}
 
-        // Batch chunk insert ke material_raw
         const CHUNK = 500;
         for (let i = 0; i < cleanRows.length; i += CHUNK) {
           const chunk = cleanRows.slice(i, i + CHUNK);
@@ -394,15 +405,8 @@
       }
 
       case 'runAiCleansingAnalysis': {
-        const res = await supabaseRequest('rpc/run_ai_duplicate_analysis', {
-          method: 'POST',
-          body: {}
-        });
-        return {
-          success: true,
-          data: res,
-          message: 'Analisis AI Duplicate & Similarity selesai.'
-        };
+        const res = await supabaseRequest('rpc/run_ai_duplicate_analysis', { method: 'POST', body: {} });
+        return { success: true, data: res, message: 'Analisis AI Duplicate & Similarity selesai.' };
       }
 
       case 'getDuplicates': {
@@ -434,7 +438,6 @@
             body: { status: 'ACTIVE_GOLDEN' }
           });
         }
-
         return { success: true, message: 'Keputusan review berhasil disimpan.' };
       }
 
@@ -449,23 +452,17 @@
           supabaseRequest('app_users?select=id,username,full_name,role,is_active,created_at&order=created_at.asc'),
           supabaseRequest('app_role_permissions?select=*')
         ]);
-
         (roles || []).forEach(r => {
           if (typeof r.allowed_menus === 'string') {
             try { r.allowed_menus = JSON.parse(r.allowed_menus); } catch (_) {}
           }
         });
-
-        return {
-          success: true,
-          data: { users: users || [], roles: roles || [] }
-        };
+        return { success: true, data: { users: users || [], roles: roles || [] } };
       }
 
       case 'saveRolePermissions': {
         const [roleKey, allowedMenus, permissionsObj] = args;
         if (!roleKey) throw new Error('Role key wajib diisi.');
-
         const payload = {
           role: roleKey,
           allowed_menus: Array.isArray(allowedMenus) ? allowedMenus : [],
@@ -475,19 +472,13 @@
           can_manage_settings: Boolean(permissionsObj?.can_manage_settings),
           updated_at: new Date().toISOString()
         };
-
-        await supabaseRequest(`app_role_permissions?role=eq.${encodeURIComponent(roleKey)}`, {
-          method: 'PATCH',
-          body: payload
-        });
-
+        await supabaseRequest(`app_role_permissions?role=eq.${encodeURIComponent(roleKey)}`, { method: 'PATCH', body: payload });
         return { success: true, message: `Hak akses peran ${roleKey} berhasil disimpan.` };
       }
 
       case 'saveAppUser': {
         const [userData] = args;
         if (!userData || !userData.username) throw new Error('Username wajib diisi.');
-
         const uName = userData.username.trim().toLowerCase();
         const fullName = (userData.full_name || uName).trim();
         const role = userData.role || 'OPERATOR';
@@ -495,9 +486,7 @@
 
         if (userData.id) {
           const patchData = { full_name: fullName, role: role, is_active: isActive };
-          if (userData.password) {
-            patchData.password_hash = await sha256Hex(userData.password);
-          }
+          if (userData.password) patchData.password_hash = await sha256Hex(userData.password);
           await supabaseRequest(`app_users?id=eq.${userData.id}`, { method: 'PATCH', body: patchData });
           return { success: true, message: `Pengguna ${uName} berhasil diperbarui.` };
         } else {
@@ -519,11 +508,8 @@
       case 'getApprovedDuplicatesReport': {
         const [status = 'APPROVED_DUPLICATE'] = args;
         let q = 'duplicate_analysis?order=potential_saving.desc,duplicate_score.desc&limit=500';
-        if (status === 'ALL_APPROVED') {
-          q += '&review_status=in.(APPROVED_DUPLICATE,MERGE_AND_OBSOLETE)';
-        } else if (status) {
-          q += `&review_status=eq.${encodeURIComponent(status)}`;
-        }
+        if (status === 'ALL_APPROVED') q += '&review_status=in.(APPROVED_DUPLICATE,MERGE_AND_OBSOLETE)';
+        else if (status) q += `&review_status=eq.${encodeURIComponent(status)}`;
 
         const rows = await supabaseRequest(q) || [];
         let totalSavings = 0;
@@ -562,7 +548,7 @@
    * Fungsi sentral callServer untuk kompatibilitas penuh dengan seluruh kode antarmuka
    */
   window.callServer = async function(name, ...args) {
-    // 1. Lingkungan Google Apps Script
+    // 1. Lingkungan Asli Google Apps Script (didalam Web App iframe)
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       return new Promise((resolve, reject) => {
         google.script.run
@@ -576,18 +562,30 @@
       });
     }
 
-    // 2. Lingkungan GitHub Pages / Static Hosting -> Gunakan Direct Supabase Mode!
-    if (shouldUseDirectSupabase()) {
+    // 2. Mode 'appscript' (Memanggil Google Apps Script Web App URL dari GitHub Pages)
+    const mode = (config.MODE || 'appscript').toLowerCase();
+    const gasUrl = getGasUrl();
+
+    if (mode === 'appscript' || mode === 'gas') {
+      if (gasUrl) {
+        return await callGasWebApi(name, args);
+      } else {
+        // Jika GAS_URL belum diisi, fallback otomatis ke Direct Supabase agar aplikasi tetap berfungsi
+        console.info('GAS_URL belum diatur, mencoba Direct Supabase mode...');
+        return await executeDirectSupabase(name, ...args);
+      }
+    }
+
+    // 3. Mode 'direct' (Langsung ke Supabase)
+    if (mode === 'direct') {
       return await executeDirectSupabase(name, ...args);
     }
 
-    // 3. Lingkungan Localhost dengan Server Node.js Express Backend
+    // 4. Mode 'api' (Backend Node.js Express)
     try {
       switch (name) {
-        case 'getAppStatus':
-          return await backendHttp('/status');
-        case 'getDashboardSummary':
-          return await backendHttp('/materials/dashboard-summary');
+        case 'getAppStatus': return await backendHttp('/status');
+        case 'getDashboardSummary': return await backendHttp('/materials/dashboard-summary');
         case 'getMaterialMaster': {
           const [page = 1, pageSize = 25, search = ''] = args;
           return await backendHttp(`/materials?page=${page}&limit=${pageSize}&search=${encodeURIComponent(search)}`);
@@ -596,10 +594,8 @@
           const [rows = [], fileName = ''] = args;
           return await backendHttp('/upload', { method: 'POST', body: JSON.stringify({ rows, fileName }) });
         }
-        case 'getUploadHistory':
-          return await backendHttp('/upload/history');
-        case 'runAiCleansingAnalysis':
-          return await backendHttp('/duplicates/run-ai', { method: 'POST', body: JSON.stringify({}) });
+        case 'getUploadHistory': return await backendHttp('/upload/history');
+        case 'runAiCleansingAnalysis': return await backendHttp('/duplicates/run-ai', { method: 'POST', body: JSON.stringify({}) });
         case 'getDuplicates': {
           const [status = 'ALL', minScore = 0] = args;
           return await backendHttp(`/duplicates?status=${encodeURIComponent(status)}&minScore=${minScore}`);
@@ -619,10 +615,8 @@
           const [username, password] = args;
           return await backendHttp('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) });
         }
-        case 'getSystemAccessControl':
-          return await backendHttp('/auth/access-control');
-        case 'getUserManagementData':
-          return await backendHttp('/users');
+        case 'getSystemAccessControl': return await backendHttp('/auth/access-control');
+        case 'getUserManagementData': return await backendHttp('/users');
         case 'saveRolePermissions': {
           const [roleKey, allowedMenus, permissionsObj] = args;
           return await backendHttp('/users/permissions', { method: 'POST', body: JSON.stringify({ roleKey, allowedMenus, permissionsObj }) });
@@ -639,8 +633,7 @@
           const [url, key] = args;
           return await backendHttp('/settings/supabase', { method: 'POST', body: JSON.stringify({ url, key }) });
         }
-        case 'testSupabaseConnection':
-          return await backendHttp('/settings/test-connection');
+        case 'testSupabaseConnection': return await backendHttp('/settings/test-connection');
         case 'getApprovedDuplicatesReport': {
           const [status = 'APPROVED_DUPLICATE'] = args;
           return await backendHttp(`/reports/approved-duplicates?status=${encodeURIComponent(status)}`);
@@ -649,8 +642,7 @@
           throw new Error(`Endpoint untuk aksi "${name}" tidak ditemukan.`);
       }
     } catch (err) {
-      // Jika backend gagal dijangkau (misal server belum dijalankan), fallback otomatis ke Direct Supabase
-      console.warn('Backend API tidak merespons, mencoba Direct Supabase mode:', err.message);
+      console.warn('Backend API tidak merespons, fallback ke Direct Supabase:', err.message);
       return await executeDirectSupabase(name, ...args);
     }
   };

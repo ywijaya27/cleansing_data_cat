@@ -11,13 +11,110 @@ const MAX_UPLOAD_ROWS = 100000;
 const DEFAULT_SUPABASE_URL = 'https://tayybadwfypmedjixemd.supabase.co';
 
 /**
- * ENTRY POINT WEB APP
+ * ENTRY POINT WEB APP & REST API (GET)
  */
-function doGet() {
+function doGet(e) {
+  if (e && e.parameter && e.parameter.action) {
+    return handleApiRequest_(e.parameter.action, [e.parameter.arg0, e.parameter.arg1, e.parameter.arg2]);
+  }
   return HtmlService.createTemplateFromFile('Index').evaluate()
     .setTitle(APP_NAME)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+/**
+ * ENTRY POINT REST API (POST dari GitHub Pages / Frontend Terpisah)
+ */
+function doPost(e) {
+  try {
+    let payload = {};
+    if (e && e.postData && e.postData.contents) {
+      payload = JSON.parse(e.postData.contents);
+    }
+    const action = payload.action || (e && e.parameter && e.parameter.action);
+    const args = Array.isArray(payload.args) ? payload.args : [];
+    return handleApiRequest_(action, args);
+  } catch (err) {
+    return jsonResponse_({
+      success: false,
+      data: null,
+      message: 'GAS API Parse Error: ' + err.message
+    });
+  }
+}
+
+function jsonResponse_(obj) {
+  return ContentService
+    .createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleApiRequest_(action, args) {
+  try {
+    let res;
+    switch (action) {
+      case 'getAppStatus':
+        res = getAppStatus();
+        break;
+      case 'setupSupabaseConfig':
+        res = setupSupabaseConfig(args[0], args[1]);
+        break;
+      case 'testSupabaseConnection':
+        res = testSupabaseConnection();
+        break;
+      case 'getDashboardSummary':
+        res = getDashboardSummary();
+        break;
+      case 'getMaterialMaster':
+        res = getMaterialMaster(args[0], args[1], args[2]);
+        break;
+      case 'uploadMasterData':
+        res = uploadMasterData(args[0], args[1]);
+        break;
+      case 'getUploadHistory':
+        res = getUploadHistory();
+        break;
+      case 'runAiCleansingAnalysis':
+        res = runAiCleansingAnalysis();
+        break;
+      case 'getDuplicates':
+        res = getDuplicates(args[0], args[1]);
+        break;
+      case 'saveDuplicateDecision':
+        res = saveDuplicateDecision(args[0], args[1], args[2], args[3], args[4]);
+        break;
+      case 'getSimilarMaterials':
+        res = getSimilarMaterials(args[0]);
+        break;
+      case 'loginUser':
+        res = loginUser(args[0], args[1]);
+        break;
+      case 'getSystemAccessControl':
+        res = getSystemAccessControl();
+        break;
+      case 'getUserManagementData':
+        res = getUserManagementData();
+        break;
+      case 'saveRolePermissions':
+        res = saveRolePermissions(args[0], args[1], args[2]);
+        break;
+      case 'saveAppUser':
+        res = saveAppUser(args[0]);
+        break;
+      case 'deleteAppUser':
+        res = deleteAppUser(args[0], args[1]);
+        break;
+      case 'getApprovedDuplicatesReport':
+        res = getApprovedDuplicatesReport(args[0]);
+        break;
+      default:
+        res = response_(false, null, 'Action tidak dikenal: ' + action);
+    }
+    return jsonResponse_(res);
+  } catch (err) {
+    return jsonResponse_(response_(false, null, err.message));
+  }
 }
 
 /**

@@ -93,6 +93,9 @@
     if (configMsg) {
       configMsg.textContent = message || (connected ? 'Supabase aktif dan siap digunakan.' : 'Koneksi belum terkonfigurasi.');
     }
+    if ($('gasUrlInput')) {
+      $('gasUrlInput').value = localStorage.getItem('gas_url') || (window.APP_CONFIG && window.APP_CONFIG.GAS_URL) || '';
+    }
     if ($('supabaseUrlInput')) {
       $('supabaseUrlInput').value = url || localStorage.getItem('supabase_url') || (window.APP_CONFIG && window.APP_CONFIG.SUPABASE_URL) || 'https://tayybadwfypmedjixemd.supabase.co';
     }
@@ -368,24 +371,37 @@
   }
 
   async function handleSaveConfig() {
+    const gasUrl = $('gasUrlInput') ? $('gasUrlInput').value.trim() : '';
     const url = $('supabaseUrlInput').value.trim();
     const key = $('supabaseKeyInput').value.trim();
 
-    if (!url) {
-      toast('Project URL Supabase wajib diisi.', 'error');
+    if (gasUrl) {
+      localStorage.setItem('gas_url', gasUrl);
+    } else {
+      localStorage.removeItem('gas_url');
+    }
+
+    if (!gasUrl && !url) {
+      toast('Project URL Supabase atau Apps Script URL wajib diisi.', 'error');
       return;
     }
-    if (!key) {
-      toast('Service Role Key wajib diisi.', 'error');
+    if (!gasUrl && !key) {
+      toast('Service Role Key Supabase wajib diisi jika tidak memakai Google Apps Script URL.', 'error');
       return;
     }
 
     try {
       showLoading(true, 'Menyimpan & menguji koneksi...');
-      const r = await callServer('setupSupabaseConfig', url, key);
-      toast(r.message || 'Konfigurasi Supabase berhasil disimpan!', 'success');
-      $('supabaseKeyInput').value = '';
+      if (url && key) {
+        const r = await callServer('setupSupabaseConfig', url, key);
+        toast(r.message || 'Konfigurasi berhasil disimpan!', 'success');
+      } else {
+        const r = await callServer('testSupabaseConnection');
+        toast(r.message || 'Koneksi ke Google Apps Script berhasil!', 'success');
+      }
       await checkAppStatus();
+      await loadAccessControl();
+      applyAccessControl();
       loadDashboard();
     } catch (e) {
       toast('Gagal menyimpan konfigurasi: ' + e.message, 'error');

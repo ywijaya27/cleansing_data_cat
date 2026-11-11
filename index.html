@@ -626,6 +626,12 @@
 
         <form id="settingsForm" onsubmit="return false;">
           <div class="form-group mb-3">
+            <label for="gasUrlInput">Google Apps Script Web App URL <span class="badge bg-secondary">Mode Apps Script</span></label>
+            <input id="gasUrlInput" type="url" class="form-control-custom" placeholder="https://script.google.com/macros/s/AKfycbx.../exec">
+            <small class="text-muted">Opsional: Masukkan URL Web App Google Apps Script jika frontend GitHub terhubung via GAS.</small>
+          </div>
+
+          <div class="form-group mb-3">
             <label for="supabaseUrlInput">Project URL Supabase</label>
             <input id="supabaseUrlInput" type="url" class="form-control-custom" placeholder="https://<project-ref>.supabase.co" required>
             <small class="text-muted">Contoh: https://tayybadwfypmedjixemd.supabase.co</small>
