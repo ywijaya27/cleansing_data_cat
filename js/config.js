@@ -16,7 +16,7 @@ window.APP_CONFIG = {
 
   // Konfigurasi Database Supabase PostgreSQL (dikelola oleh backend Apps Script)
   SUPABASE_URL: 'https://tayybadwfypmedjixemd.supabase.co',
-  SUPABASE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRheXliYWR3ZnlwbWVkaml4ZW1kIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5NDM3MDM2NSwiZXhwIjoyMTA5OTQ2MzY1fQ.g9ZMpG2oYyMt4LsB0VzqC1r2lNNRKDmzwaTe13IS5Us',
+  SUPABASE_KEY: '',
 
   // Versi Aplikasi
   VERSION: '2.2.0-appscript'
