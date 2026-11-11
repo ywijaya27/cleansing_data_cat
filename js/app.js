@@ -92,8 +92,14 @@
     if (configMsg) {
       configMsg.textContent = message || (connected ? 'Supabase aktif dan siap digunakan.' : 'Koneksi belum terkonfigurasi.');
     }
-    if (url && $('supabaseUrlInput')) {
-      $('supabaseUrlInput').value = url;
+    if ($('supabaseUrlInput')) {
+      $('supabaseUrlInput').value = url || localStorage.getItem('supabase_url') || (window.APP_CONFIG && window.APP_CONFIG.SUPABASE_URL) || 'https://tayybadwfypmedjixemd.supabase.co';
+    }
+    if ($('supabaseKeyInput')) {
+      const savedKey = localStorage.getItem('supabase_key') || (window.APP_CONFIG && window.APP_CONFIG.SUPABASE_KEY) || '';
+      if (savedKey && !$('supabaseKeyInput').value) {
+        $('supabaseKeyInput').value = savedKey;
+      }
     }
   }
 
@@ -403,6 +409,10 @@
 
   function openAdminLoginModal() {
     if ($('adminLoginForm')) $('adminLoginForm').reset();
+    const noticeEl = $('loginConfigWarning');
+    if (noticeEl) {
+      noticeEl.classList.toggle('d-none', Boolean(state.configured));
+    }
     const modalEl = $('adminLoginModal');
     if (modalEl && typeof bootstrap !== 'undefined') {
       bootstrap.Modal.getOrCreateInstance(modalEl).show();
@@ -411,6 +421,17 @@
 
   async function handleAdminLogin(e) {
     if (e && e.preventDefault) e.preventDefault();
+
+    if (!state.configured) {
+      toast('Supabase belum terhubung. Silakan buka menu Pengaturan dan masukkan Supabase Service Role Key.', 'error');
+      const modalEl = $('adminLoginModal');
+      if (modalEl && typeof bootstrap !== 'undefined') {
+        bootstrap.Modal.getInstance(modalEl)?.hide();
+      }
+      navigateTo('settings');
+      return;
+    }
+
     const u = $('loginUsername').value.trim();
     const p = $('loginPassword').value;
 

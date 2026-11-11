@@ -3,17 +3,18 @@
  * Pengaturan endpoint backend & Supabase
  */
 window.APP_CONFIG = {
-  // Mode koneksi: 'api' (menggunakan Backend Node.js / Express) atau 'direct' (Supabase langsung)
-  MODE: 'api',
+  // 'auto': menggunakan Direct Supabase di GitHub Pages (*.github.io), dan Node API di localhost
+  MODE: 'auto',
 
-  // URL Backend Node.js Express (kosongkan jika frontend dan backend di-host dalam domain yang sama)
-  API_BASE_URL: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-    ? 'http://localhost:5000/api'
-    : '/api',
+  // URL Backend Node.js Express (untuk dev lokal)
+  API_BASE_URL: 'http://localhost:5000/api',
 
   // Konfigurasi Database Supabase PostgreSQL
   SUPABASE_URL: 'https://tayybadwfypmedjixemd.supabase.co',
-  
+
+  // Kunci API Supabase (dapat juga disimpan melalui menu Pengaturan di aplikasi)
+  SUPABASE_KEY: '',
+
   // Versi Aplikasi
-  VERSION: '2.0.0-github'
+  VERSION: '2.1.0-github'
 };

@@ -857,6 +857,9 @@
               <h6 class="mb-1">Masuk dengan Akun Admin</h6>
               <p class="text-muted small mb-0">Mode pengunjung (guest) tetap dapat menggunakan menu umum tanpa harus login.</p>
             </div>
+            <div id="loginConfigWarning" class="alert alert-warning small p-2 mb-3 d-none">
+              <i class="bi bi-exclamation-triangle-fill me-1"></i>Database Supabase belum terhubung. Buka menu <a href="javascript:void(0)" onclick="bootstrap.Modal.getInstance(document.getElementById('adminLoginModal')).hide(); window.navigateToSection('settings');" class="alert-link fw-bold">Pengaturan</a> untuk memasukkan Supabase Key.
+            </div>
             <div class="form-group mb-3">
               <label for="loginUsername">Username</label>
               <input id="loginUsername" type="text" class="form-control-custom" placeholder="admin" required autofocus>
