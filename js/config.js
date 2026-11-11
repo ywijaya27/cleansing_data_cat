@@ -9,7 +9,7 @@ window.APP_CONFIG = {
 
   // Masukkan URL Web App Google Apps Script Anda di sini:
   // Contoh: 'https://script.google.com/macros/s/AKfycbx.../exec'
-  GAS_URL: '',
+  GAS_URL: 'https://script.google.com/macros/s/AKfycbxb1A_cF7CHNlRKARSdC4B2RN6FV3iFRpJHkJ4QgC9s13J_7ZZo051bhUBeVstO_862/exec',
 
   // URL Backend Node.js Express (opsional jika menggunakan mode 'api')
   API_BASE_URL: 'http://localhost:5000/api',
