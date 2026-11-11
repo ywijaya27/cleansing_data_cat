@@ -19,17 +19,18 @@
 
   /**
    * Helper Pengambilan Kredensial & URL
+   * Memprioritaskan nilai yang sudah dikonfigurasi di js/config.js agar tidak tertimpa cache localStorage lama.
    */
   const getGasUrl = () => {
-    return (localStorage.getItem('gas_url') || config.GAS_URL || '').trim();
+    return (config.GAS_URL || localStorage.getItem('gas_url') || '').trim();
   };
 
   const getSupabaseUrl = () => {
-    return (localStorage.getItem('supabase_url') || config.SUPABASE_URL || 'https://tayybadwfypmedjixemd.supabase.co').replace(/\/$/, '');
+    return (config.SUPABASE_URL || localStorage.getItem('supabase_url') || 'https://tayybadwfypmedjixemd.supabase.co').replace(/\/$/, '');
   };
 
   const getSupabaseKey = () => {
-    return localStorage.getItem('supabase_key') || config.SUPABASE_KEY || '';
+    return (config.SUPABASE_KEY || localStorage.getItem('supabase_key') || '').trim();
   };
 
   /**
@@ -50,12 +51,21 @@
       body: payload
     });
 
+    const rawText = await res.text().catch(() => '');
     if (!res.ok) {
-      const errTxt = await res.text().catch(() => '');
-      throw new Error(errTxt || `GAS Web App HTTP ${res.status}: ${res.statusText}`);
+      throw new Error(rawText || `GAS Web App HTTP ${res.status}: ${res.statusText}`);
     }
 
-    const data = await res.json().catch(() => ({}));
+    let data = {};
+    try {
+      data = rawText ? JSON.parse(rawText) : {};
+    } catch (_) {
+      if (/<!doctype|<html|<title>/i.test(rawText)) {
+        throw new Error('Google Apps Script mengembalikan halaman HTML, bukan JSON. Pastikan Web App sudah di-deploy dengan akses "Anyone (Siapa saja)" dan URL /exec benar.');
+      }
+      throw new Error('Respons Google Apps Script tidak valid (bukan JSON).');
+    }
+
     if (!data.success) {
       throw new Error(data.message || 'Eksekusi Google Apps Script gagal.');
     }
@@ -253,7 +263,8 @@
           data: {
             id: user.id,
             username: user.username,
-            full_name: user.full_name,
+            fullName: user.full_name || user.username,
+            full_name: user.full_name || user.username,
             role: user.role,
             permissions: permissions || {}
           },
@@ -288,58 +299,80 @@
         };
       }
 
+      case 'getDashboardData':
       case 'getDashboardSummary': {
-        try {
-          const rows = await supabaseRequest('vw_dashboard_summary?limit=1');
-          if (rows && rows.length) return { success: true, data: rows[0] };
-        } catch (_) {}
-
         const [allMat, allDup, allSim] = await Promise.all([
-          supabaseRequest('material_raw?select=id,status,stock_qty,stock_value,material_group'),
+          supabaseRequest('material_raw?select=id,material_description,manufacturer,part_number,base_uom,stock_qty,stock_value,material_group'),
           supabaseRequest('duplicate_analysis?select=potential_saving,review_status'),
-          supabaseRequest('similar_material?select=saving_opportunity')
+          supabaseRequest('similar_material?select=id')
         ]);
 
         const totalMat = allMat?.length || 0;
         const dupCount = allDup?.length || 0;
         const simCount = allSim?.length || 0;
         const pendingReview = allDup?.filter(x => x.review_status === 'PENDING').length || 0;
-        const totalSavings = (allDup || []).reduce((acc, x) => acc + (Number(x.potential_saving) || 0), 0) +
-                             (allSim || []).reduce((acc, x) => acc + (Number(x.saving_opportunity) || 0), 0);
+        const totalSavings = (allDup || []).reduce((acc, x) => acc + (Number(x.potential_saving) || 0), 0);
 
         const groupMap = {};
+        let noMfr = 0, noPn = 0, noUom = 0;
         (allMat || []).forEach(m => {
-          const g = m.material_group || 'OTHER';
+          const g = m.material_group || 'Uncategorized';
           groupMap[g] = (groupMap[g] || 0) + 1;
+          if (!m.manufacturer) noMfr++;
+          if (!m.part_number) noPn++;
+          if (!m.base_uom) noUom++;
         });
-        const groupDistribution = Object.keys(groupMap).map(k => ({ group: k, count: groupMap[k] }));
+        const commodity = Object.keys(groupMap)
+          .map(k => ({ group: k, count: groupMap[k] }))
+          .sort((a, b) => b.count - a.count)
+          .slice(0, 8);
+        const totalCells = Math.max(1, totalMat * 4);
+        const missingCells = noMfr + noPn + noUom;
+        const qualityScore = totalMat ? Math.round(((totalCells - missingCells) / totalCells) * 1000) / 10 : 100;
 
         return {
           success: true,
           data: {
+            totalMaterial: totalMat,
+            duplicateCandidate: dupCount,
+            similarCandidate: simCount,
+            pendingReview: pendingReview,
+            potentialSaving: totalSavings,
+            dataQualityScore: qualityScore,
+            qualityIssues: { noMfr, noPn, noUom },
+            commodity,
+            insight: `Ditemukan ${dupCount} kandidat duplikat dan ${simCount} material serupa. Lakukan review pada menu Duplicate Review.`,
+            // Alias kompatibilitas
             total_materials: totalMat,
             duplicated_count: dupCount,
             similar_count: simCount,
             potential_savings: totalSavings,
-            data_quality_score: totalMat > 0 ? Math.max(50, Math.min(100, Math.round(100 - (dupCount / totalMat * 100)))) : 98,
+            data_quality_score: qualityScore,
             pending_review_count: pendingReview,
-            group_distribution: groupDistribution
+            group_distribution: commodity
           }
         };
       }
 
+      case 'getMaterials':
       case 'getMaterialMaster': {
         const [page = 1, pageSize = 25, search = ''] = args;
-        const offset = (page - 1) * pageSize;
-        let q = `material_raw?order=created_at.desc&limit=${pageSize}&offset=${offset}`;
+        const p = Math.max(1, Number(page) || 1);
+        const ps = Math.min(100, Math.max(10, Number(pageSize) || 25));
+        const offset = (p - 1) * ps;
+        let q = `material_raw?select=*&order=id.desc&limit=${ps}&offset=${offset}`;
         if (search) {
-          const sc = encodeURIComponent(`%${search.trim()}%`);
+          const sc = encodeURIComponent(`%${String(search).trim()}%`);
           q += `&or=(material_code.ilike.${sc},material_description.ilike.${sc},manufacturer.ilike.${sc},part_number.ilike.${sc})`;
         }
-        const rows = await supabaseRequest(q, { prefer: 'count=exact' });
-        return { success: true, data: rows || [] };
+        const rows = await supabaseRequest(q) || [];
+        return {
+          success: true,
+          data: name === 'getMaterialMaster' ? rows : { rows, page: p, pageSize: ps }
+        };
       }
 
+      case 'uploadMaterials':
       case 'uploadMasterData': {
         const [rows = [], fileName = ''] = args;
         if (!rows.length) throw new Error('Data upload kosong.');
@@ -347,9 +380,8 @@
         const cleanRows = rows.map((r, i) => {
           const code = String(r.material_code || r.MATERIAL_CODE || r.Material_Code || `MAT-${100000 + i}`).trim();
           const desc = String(r.material_description || r.MATERIAL_DESCRIPTION || r.Deskripsi || '').trim();
-          const mfr = String(r.manufacturer || r.MANUFACTURER || '-').trim();
-          const pn = String(r.part_number || r.PART_NUMBER || '-').trim();
-          const normPn = pn.toUpperCase().replace(/[^A-Z0-9]/g, '');
+          const mfr = String(r.manufacturer || r.MANUFACTURER || '').trim();
+          const pn = String(r.part_number || r.PART_NUMBER || '').trim();
           const grp = String(r.material_group || r.MATERIAL_GROUP || 'GENERAL').trim().toUpperCase();
           const uom = String(r.base_uom || r.BASE_UOM || 'EA').trim().toUpperCase();
           const qty = parseFloat(r.stock_qty || r.STOCK_QTY || 0) || 0;
@@ -360,23 +392,20 @@
             material_description: desc,
             manufacturer: mfr,
             part_number: pn,
-            normalized_part_number: normPn,
             material_group: grp,
             base_uom: uom,
             stock_qty: qty,
-            stock_value: val,
-            status: 'ACTIVE_RAW',
-            data_completeness: (code && desc && mfr !== '-' && pn !== '-') ? 100 : 75
+            stock_value: val
           };
         });
 
         try {
-          await supabaseRequest('upload_history', {
+          await supabaseRequest('upload_batch', {
             method: 'POST',
             body: [{
               file_name: fileName || 'Upload_Master_' + new Date().toISOString().slice(0, 10),
-              total_rows: cleanRows.length,
-              inserted_rows: cleanRows.length,
+              total_records: cleanRows.length,
+              uploaded_by: 'Direct User',
               status: 'COMPLETED'
             }]
           });
@@ -387,34 +416,58 @@
           const chunk = cleanRows.slice(i, i + CHUNK);
           await supabaseRequest('material_raw', {
             method: 'POST',
-            prefer: 'resolution=merge-duplicates',
+            prefer: 'return=minimal',
             body: chunk
           });
         }
 
         return {
           success: true,
-          data: { totalInserted: cleanRows.length },
+          data: { inserted: cleanRows.length, errors: 0, totalInserted: cleanRows.length },
           message: `Berhasil mengunggah ${cleanRows.length} material.`
         };
       }
 
+      case 'normalizeMaterial': {
+        const [materialId] = args;
+        const rows = await supabaseRequest(`material_raw?id=eq.${encodeURIComponent(materialId)}&select=*`);
+        if (!rows || !rows.length) throw new Error('Material tidak ditemukan.');
+        const m = rows[0];
+        const normDesc = String(m.material_description || '').trim().toUpperCase().replace(/\s+/g, ' ');
+        const res = await supabaseRequest('material_normalized', {
+          method: 'POST',
+          body: [{
+            raw_material_id: m.id,
+            normalized_description: normDesc,
+            normalized_brand: String(m.manufacturer || '').trim().toUpperCase(),
+            normalized_part_number: String(m.part_number || '').trim().toUpperCase(),
+            normalization_status: 'COMPLETED'
+          }]
+        });
+        return { success: true, data: res ? res[0] : { normalized_description: normDesc }, message: 'Material berhasil dinormalisasi.' };
+      }
+
       case 'getUploadHistory': {
-        const rows = await supabaseRequest('upload_history?order=created_at.desc&limit=10');
+        const [limit = 20] = args;
+        const limitNum = Math.min(100, Number(limit) || 20);
+        const rows = await supabaseRequest(`upload_batch?select=*&order=created_at.desc&limit=${limitNum}`).catch(() => []);
         return { success: true, data: rows || [] };
       }
 
+      case 'runAICleansingAnalysis':
       case 'runAiCleansingAnalysis': {
-        const res = await supabaseRequest('rpc/run_ai_duplicate_analysis', { method: 'POST', body: {} });
-        return { success: true, data: res, message: 'Analisis AI Duplicate & Similarity selesai.' };
+        const [minDup = 75, minSim = 60] = args;
+        const res = await supabaseRequest('rpc/run_material_cleansing_ai', {
+          method: 'POST',
+          body: { p_min_duplicate_score: Number(minDup) || 75, p_min_similarity_score: Number(minSim) || 60 }
+        });
+        return { success: true, data: res, message: (res && res.message) || 'Analisis AI selesai diproses.' };
       }
 
+      case 'getDuplicateCandidates':
       case 'getDuplicates': {
-        const [status = 'ALL', minScore = 0] = args;
-        let q = 'duplicate_analysis?order=duplicate_score.desc&limit=250';
-        if (status !== 'ALL') q += `&review_status=eq.${encodeURIComponent(status)}`;
-        if (minScore > 0) q += `&duplicate_score=gte.${minScore}`;
-        const rows = await supabaseRequest(q);
+        const limit = typeof args[0] === 'number' ? Math.min(300, Math.max(10, args[0])) : 300;
+        const rows = await supabaseRequest(`duplicate_analysis?select=*&order=duplicate_score.desc&limit=${limit}`);
         return { success: true, data: rows || [] };
       }
 
@@ -585,20 +638,26 @@
     try {
       switch (name) {
         case 'getAppStatus': return await backendHttp('/status');
+        case 'getDashboardData':
         case 'getDashboardSummary': return await backendHttp('/materials/dashboard-summary');
+        case 'getMaterials':
         case 'getMaterialMaster': {
           const [page = 1, pageSize = 25, search = ''] = args;
           return await backendHttp(`/materials?page=${page}&limit=${pageSize}&search=${encodeURIComponent(search)}`);
         }
+        case 'uploadMaterials':
         case 'uploadMasterData': {
           const [rows = [], fileName = ''] = args;
           return await backendHttp('/upload', { method: 'POST', body: JSON.stringify({ rows, fileName }) });
         }
+        case 'normalizeMaterial': return await backendHttp(`/materials/${encodeURIComponent(args[0])}/normalize`, { method: 'POST', body: JSON.stringify({}) });
         case 'getUploadHistory': return await backendHttp('/upload/history');
+        case 'runAICleansingAnalysis':
         case 'runAiCleansingAnalysis': return await backendHttp('/duplicates/run-ai', { method: 'POST', body: JSON.stringify({}) });
+        case 'getDuplicateCandidates':
         case 'getDuplicates': {
-          const [status = 'ALL', minScore = 0] = args;
-          return await backendHttp(`/duplicates?status=${encodeURIComponent(status)}&minScore=${minScore}`);
+          const limit = typeof args[0] === 'number' ? args[0] : 300;
+          return await backendHttp(`/duplicates?limit=${limit}`);
         }
         case 'saveDuplicateDecision': {
           const [candidateId, decision, selectedMaster, notes, reviewerName] = args;

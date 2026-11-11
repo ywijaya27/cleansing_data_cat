@@ -63,23 +63,31 @@ function handleApiRequest_(action, args) {
       case 'testSupabaseConnection':
         res = testSupabaseConnection();
         break;
+      case 'getDashboardData':
       case 'getDashboardSummary':
-        res = getDashboardSummary();
+        res = getDashboardData();
         break;
+      case 'getMaterials':
       case 'getMaterialMaster':
-        res = getMaterialMaster(args[0], args[1], args[2]);
+        res = getMaterials(args[0], args[1], args[2]);
         break;
+      case 'uploadMaterials':
       case 'uploadMasterData':
-        res = uploadMasterData(args[0], args[1]);
+        res = uploadMaterials(args[0], args[1]);
+        break;
+      case 'normalizeMaterial':
+        res = normalizeMaterial(args[0]);
         break;
       case 'getUploadHistory':
-        res = getUploadHistory();
+        res = getUploadHistory(args[0]);
         break;
+      case 'runAICleansingAnalysis':
       case 'runAiCleansingAnalysis':
-        res = runAiCleansingAnalysis();
+        res = runAICleansingAnalysis(args[0], args[1]);
         break;
+      case 'getDuplicateCandidates':
       case 'getDuplicates':
-        res = getDuplicates(args[0], args[1]);
+        res = getDuplicateCandidates(args[0]);
         break;
       case 'saveDuplicateDecision':
         res = saveDuplicateDecision(args[0], args[1], args[2], args[3], args[4]);
@@ -852,6 +860,7 @@ function loginUser(username, password) {
       id: matchedUser.id,
       username: matchedUser.username,
       fullName: matchedUser.full_name || matchedUser.username,
+      full_name: matchedUser.full_name || matchedUser.username,
       role: matchedUser.role,
       permissions: permissions
     }, 'Login berhasil. Selamat datang, ' + (matchedUser.full_name || matchedUser.username) + '!');

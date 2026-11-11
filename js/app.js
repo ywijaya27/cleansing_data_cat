@@ -438,16 +438,6 @@
   async function handleAdminLogin(e) {
     if (e && e.preventDefault) e.preventDefault();
 
-    if (!state.configured) {
-      toast('Supabase belum terhubung. Silakan buka menu Pengaturan dan masukkan Supabase Service Role Key.', 'error');
-      const modalEl = $('adminLoginModal');
-      if (modalEl && typeof bootstrap !== 'undefined') {
-        bootstrap.Modal.getInstance(modalEl)?.hide();
-      }
-      navigateTo('settings');
-      return;
-    }
-
     const u = $('loginUsername').value.trim();
     const p = $('loginPassword').value;
 
@@ -460,6 +450,10 @@
       showLoading(true, 'Memverifikasi akun Administrator...');
       const r = await callServer('loginUser', u, p);
       const user = r.data;
+      if (user && !user.full_name && user.fullName) {
+        user.full_name = user.fullName;
+      }
+      state.configured = true;
       state.currentUser = user;
       state.accessControl = user.permissions || {};
       sessionStorage.setItem('admin_session', JSON.stringify(user));
@@ -469,8 +463,10 @@
         bootstrap.Modal.getInstance(modalEl)?.hide();
       }
 
+      updateConnectionUI(true, 'Terhubung via Google Apps Script Web App', state.supabaseUrl);
+      await loadAccessControl();
       applyAccessControl();
-      toast(`Selamat datang kembali, ${user.full_name || user.username}! Anda masuk sebagai Administrator.`, 'success');
+      toast(`Selamat datang kembali, ${user.full_name || user.fullName || user.username}! Anda masuk sebagai Administrator.`, 'success');
       loadDashboard();
     } catch (err) {
       toast('Login gagal: ' + err.message, 'error');
