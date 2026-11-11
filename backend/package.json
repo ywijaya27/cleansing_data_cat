@@ -1,0 +1,28 @@
+{
+  "name": "cleansing-data-cat-backend",
+  "version": "1.0.0",
+  "description": "Backend REST API untuk AI Material Master Cleansing, Duplicate Review & Similarity Detection",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": [
+    "material-master",
+    "data-cleansing",
+    "duplicate-detection",
+    "similarity",
+    "supabase",
+    "express"
+  ],
+  "author": "ywijaya27",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "morgan": "^1.10.0",
+    "multer": "^1.4.5-lts.1",
+    "xlsx": "^0.18.5"
+  }
+}

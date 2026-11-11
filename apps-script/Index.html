@@ -1,0 +1,795 @@
+<!doctype html>
+<html lang="id" data-theme="dark">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI Material Master Cleansing & Rationalization</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <?!= include('Stylesheet'); ?>
+</head>
+<body>
+<div id="appRoot" class="app-shell">
+  <div id="loadingOverlay" class="loading-overlay d-none">
+    <div class="spinner-border text-accent"></div>
+    <span id="loadingMessage">Memproses...</span>
+  </div>
+
+  <aside id="sidebar" class="sidebar">
+    <div class="brand">
+      <div class="brand-icon"><i class="bi bi-box-seam"></i></div>
+      <div><strong>Material AI</strong><small>MSD Intelligence</small></div>
+    </div>
+    <nav class="nav-menu" aria-label="Navigasi utama">
+      <button type="button" class="nav-item active" data-section="dashboard"><i class="bi bi-grid-1x2"></i><span>Dashboard</span></button>
+      <button type="button" class="nav-item" data-section="upload"><i class="bi bi-cloud-arrow-up"></i><span>Upload Material</span></button>
+      <button type="button" class="nav-item" data-section="materials"><i class="bi bi-boxes"></i><span>Material Master</span></button>
+      <button type="button" class="nav-item" data-section="duplicates" id="nav-duplicates"><i class="bi bi-intersect"></i><span>Duplicate Review</span></button>
+      <button type="button" class="nav-item" data-section="similarity" id="nav-similarity"><i class="bi bi-diagram-3"></i><span>Similarity</span></button>
+      <button type="button" class="nav-item" data-section="users" id="nav-users"><i class="bi bi-people"></i><span>User &amp; Hak Akses</span></button>
+      <button type="button" class="nav-item" data-section="settings" id="nav-settings"><i class="bi bi-gear"></i><span>Pengaturan</span></button>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="d-flex align-items-center gap-2">
+        <span id="statusDot" class="status-dot"></span>
+        <span id="systemStatus">Memeriksa koneksi...</span>
+      </div>
+      <div class="small text-muted mb-1" id="sidebarRoleLabel"><i class="bi bi-person me-1"></i>Mode Pengunjung</div>
+      <button id="sidebarLogoutBtn" type="button" class="sidebar-logout-btn d-none">
+        <i class="bi bi-box-arrow-right"></i>
+        <span>Logout Admin</span>
+      </button>
+    </div>
+  </aside>
+
+  <main class="main-content">
+    <header class="topbar">
+      <div class="d-flex align-items-center gap-2">
+        <button id="menuToggle" type="button" class="icon-btn d-lg-none" aria-label="Menu"><i class="bi bi-list"></i></button>
+        <div>
+          <h1 id="pageTitle">Executive Dashboard</h1>
+          <p>AI Material Master Cleansing & Rationalization</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button id="themeToggle" type="button" class="icon-btn" aria-label="Ubah tema" title="Ubah Tema"><i class="bi bi-sun"></i></button>
+        <div class="user-chip" id="userChip">
+          <i class="bi bi-person-circle" id="userChipIcon"></i>
+          <span id="currentUser">Pengunjung (Guest)</span>
+        </div>
+        <button id="openLoginModalBtn" type="button" class="btn btn-sm btn-accent">
+          <i class="bi bi-shield-lock-fill me-1"></i>Login Admin
+        </button>
+        <button id="logoutBtn" type="button" class="icon-btn btn-logout d-none" title="Logout Admin" aria-label="Logout">
+          <i class="bi bi-box-arrow-right"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- DASHBOARD -->
+    <section id="section-dashboard" class="content-section active">
+      <div class="kpi-grid">
+        <article class="kpi-card"><span class="kpi-icon teal"><i class="bi bi-boxes"></i></span><div><small>Total Materials</small><strong id="kpiTotal">0</strong></div></article>
+        <article class="kpi-card"><span class="kpi-icon red"><i class="bi bi-copy"></i></span><div><small>Duplicate Candidates</small><strong id="kpiDuplicate">0</strong></div></article>
+        <article class="kpi-card"><span class="kpi-icon blue"><i class="bi bi-shuffle"></i></span><div><small>Similar Items</small><strong id="kpiSimilar">0</strong></div></article>
+        <article class="kpi-card"><span class="kpi-icon amber"><i class="bi bi-hourglass-split"></i></span><div><small>Pending Review</small><strong id="kpiPending">0</strong></div></article>
+        <article class="kpi-card"><span class="kpi-icon green"><i class="bi bi-clipboard-data"></i></span><div><small>Data Quality</small><strong id="kpiQuality">0%</strong></div></article>
+      </div>
+      <div class="dashboard-grid mt-4">
+        <article class="panel chart-panel">
+          <div class="panel-head">
+            <div>
+              <h2>Material by Commodity</h2>
+              <p>Distribusi grup material pada data aktif</p>
+            </div>
+          </div>
+          <div class="chart-wrap"><canvas id="commodityChart"></canvas></div>
+        </article>
+        <article class="panel insight-panel">
+          <div class="panel-head">
+            <div>
+              <h2>AI Insight</h2>
+              <p>Prioritas tindakan berdasarkan data</p>
+            </div>
+            <i class="bi bi-stars accent"></i>
+          </div>
+          <div id="aiInsight" class="insight-copy">Memuat analisis...</div>
+          <div id="qualityIssues" class="issue-list"></div>
+        </article>
+      </div>
+    </section>
+
+    <!-- UPLOAD MATERIAL -->
+    <section id="section-upload" class="content-section">
+      <div class="section-head">
+        <div>
+          <h2>Upload Material Master</h2>
+          <p>Format Excel (.xlsx) atau CSV, maksimum 100.000 record. Kolom disesuaikan secara otomatis.</p>
+        </div>
+        <button id="downloadTemplate" type="button" class="btn btn-outline-accent"><i class="bi bi-file-earmark-excel"></i> Template Excel (.xlsx)</button>
+      </div>
+      <article class="panel upload-panel">
+        <label for="materialFile" class="drop-zone">
+          <i class="bi bi-file-earmark-spreadsheet"></i>
+          <strong>Pilih file material</strong>
+          <span>.csv, .xlsx, maksimal 50 MB</span>
+          <input id="materialFile" type="file" accept=".csv,.xlsx,.xls" hidden>
+        </label>
+        <div id="fileInfo" class="file-info d-none"></div>
+        <button id="uploadBtn" type="button" class="btn btn-accent" disabled><i class="bi bi-cloud-arrow-up"></i> Validasi & Upload</button>
+      </article>
+      <article class="panel mt-4">
+        <div class="panel-head"><h2>Upload History</h2></div>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr><th>File</th><th>Total</th><th>Status</th><th>Uploaded By</th><th>Date</th></tr>
+            </thead>
+            <tbody id="uploadHistoryBody"></tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
+    <!-- MATERIAL MASTER -->
+    <section id="section-materials" class="content-section">
+      <div class="section-head">
+        <div>
+          <h2>Material Master</h2>
+          <p>Pencarian, pemfilteran, dan normalisasi standar material.</p>
+        </div>
+        <div class="search-box">
+          <i class="bi bi-search"></i>
+          <input id="materialSearch" type="search" placeholder="Cari kode, deskripsi, part number...">
+        </div>
+      </div>
+      <article class="panel">
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr><th>Material Code</th><th>Description</th><th>Manufacturer</th><th>Part Number</th><th>Group</th><th>Stock</th><th>Value</th><th>Action</th></tr>
+            </thead>
+            <tbody id="materialsBody"></tbody>
+          </table>
+        </div>
+        <div class="pager">
+          <button id="prevPage" type="button" class="btn btn-sm btn-outline-accent">Sebelumnya</button>
+          <span id="pageIndicator">Page 1</span>
+          <button id="nextPage" type="button" class="btn btn-sm btn-outline-accent">Berikutnya</button>
+        </div>
+      </article>
+    </section>
+
+    <!-- DUPLICATE REVIEW -->
+    <section id="section-duplicates" class="content-section">
+      <div class="section-head">
+        <div>
+          <h2>Duplicate Review & Cluster Engine</h2>
+          <p>Kandidat duplikasi multi-kriteria berbasis AI, pengelompokan cluster, dan rekomendasi Golden Master.</p>
+        </div>
+        <div class="d-flex gap-2">
+          <button id="runAiAnalysisBtn" type="button" class="btn btn-accent">
+            <i class="bi bi-cpu-fill"></i> Jalankan Analisis AI
+          </button>
+        </div>
+      </div>
+
+      <!-- Stat Mini Bar -->
+      <div class="kpi-grid mb-3" style="grid-template-columns: repeat(3, 1fr);">
+        <article class="kpi-card p-3">
+          <span class="kpi-icon red" style="width:36px; height:36px; font-size:16px;"><i class="bi bi-intersect"></i></span>
+          <div><small>Kandidat Pasangan</small><strong id="dupStatPairs">0</strong></div>
+        </article>
+        <article class="kpi-card p-3">
+          <span class="kpi-icon blue" style="width:36px; height:36px; font-size:16px;"><i class="bi bi-diagram-3"></i></span>
+          <div><small>Cluster Duplikat</small><strong id="dupStatClusters">0</strong></div>
+        </article>
+        <article class="kpi-card p-3">
+          <span class="kpi-icon green" style="width:36px; height:36px; font-size:16px;"><i class="bi bi-cash-stack"></i></span>
+          <div><small>Potensi Efisiensi</small><strong id="dupStatSavings" style="font-size: 18px;">Rp 0</strong></div>
+        </article>
+      </div>
+
+      <article class="panel">
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+          <div class="d-flex align-items-center gap-2 flex-wrap">
+            <select id="dupScoreFilter" class="form-control-custom" style="width: auto;">
+              <option value="75">Semua Skor (&gt;= 75%)</option>
+              <option value="85" selected>Skor Tinggi (&gt;= 85%)</option>
+              <option value="95">Identik (&gt;= 95%)</option>
+            </select>
+            <select id="dupStatusFilter" class="form-control-custom" style="width: auto;">
+              <option value="ALL">Semua Status Review</option>
+              <option value="PENDING" selected>Menunggu Review</option>
+              <option value="APPROVED_DUPLICATE">Terkonfirmasi Duplikat</option>
+              <option value="MERGE_AND_OBSOLETE">Sudah Di-Merge</option>
+              <option value="REJECTED_DIFFERENT">Ditolak (Beda)</option>
+            </select>
+          </div>
+          <div class="search-box">
+            <i class="bi bi-search"></i>
+            <input id="dupSearchInput" type="search" placeholder="Cari kode atau deskripsi...">
+          </div>
+        </div>
+
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Cluster</th>
+                <th>Candidate ID</th>
+                <th>Material A</th>
+                <th>Material B</th>
+                <th>Skor AI</th>
+                <th>Rekomendasi</th>
+                <th>Status</th>
+                <th>Aksi</th>
+              </tr>
+            </thead>
+            <tbody id="duplicatesBody"></tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
+    <!-- SIMILARITY -->
+    <section id="section-similarity" class="content-section">
+      <div class="section-head">
+        <div>
+          <h2>Similarity Detection Engine</h2>
+          <p>Deteksi kesamaan spesifikasi, alternatif pabrikan (brand cross-reference), dan substitusi material.</p>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+          <select id="simTypeFilter" class="form-control-custom" style="width: auto;">
+            <option value="ALL">Semua Tipe Similarity</option>
+            <option value="ALTERNATIVE_BRAND">Alternative Brand (Brand Berbeda)</option>
+            <option value="EQUIVALENT_SPEC">Equivalent Spec (Spesifikasi Setara)</option>
+            <option value="INTERCHANGEABLE">Interchangeable (Dapat Ditukar)</option>
+            <option value="SUBSTITUTE">Substitute (Substitusi)</option>
+          </select>
+        </div>
+      </div>
+      <article class="panel">
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Material A</th>
+                <th>Material B</th>
+                <th>Tipe Kemiripan</th>
+                <th>Skor Kemiripan</th>
+                <th>Selisih Nilai (Opsi Efisiensi)</th>
+                <th>Penjelasan AI</th>
+              </tr>
+            </thead>
+            <tbody id="similarityBody"></tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
+    <!-- USER MANAGEMENT & HAK AKSES (RBAC) -->
+    <section id="section-users" class="content-section">
+      <div class="section-head">
+        <div>
+          <h2>Pengaturan User &amp; Hak Akses (RBAC)</h2>
+          <p>Atur hak akses menu/modul untuk mode publik/guest dan kelola akun pengguna sistem.</p>
+        </div>
+        <div class="d-flex gap-2">
+          <button id="openNewUserModalBtn" type="button" class="btn btn-accent btn-sm">
+            <i class="bi bi-person-plus-fill me-1"></i>Tambah Pengguna
+          </button>
+        </div>
+      </div>
+
+      <!-- Tab Navigasi Manajemen User -->
+      <div class="d-flex gap-2 mb-4">
+        <button class="btn btn-sm btn-accent" id="tab-rbac-btn" type="button">
+          <i class="bi bi-shield-check me-1"></i>Matriks Hak Akses Menu
+        </button>
+        <button class="btn btn-sm btn-outline-accent" id="tab-users-btn" type="button">
+          <i class="bi bi-people me-1"></i>Daftar Pengguna
+        </button>
+      </div>
+
+      <!-- Panel 1: Hak Akses Menu per Role -->
+      <div id="panel-rbac" class="panel mb-4">
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2 pb-2 border-bottom">
+          <div>
+            <h3 class="h6 mb-1">Konfigurasi Hak Akses Peran</h3>
+            <p class="text-muted small mb-0">Pilih peran pengguna di bawah untuk melihat dan mengatur modul yang boleh diakses.</p>
+          </div>
+          <div class="d-flex align-items-center gap-2">
+            <label for="selectRoleConfig" class="small text-muted">Peran yang diatur:</label>
+            <select id="selectRoleConfig" class="form-control-custom" style="width: auto;">
+              <option value="GUEST" selected>GUEST (Pengunjung Tanpa Login)</option>
+              <option value="OPERATOR">OPERATOR (Operator Cleansing)</option>
+              <option value="ADMIN">ADMIN (Administrator)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="row g-4">
+          <!-- Modul Menu -->
+          <div class="col-md-7 border-end">
+            <h4 class="small fw-bold text-accent mb-3"><i class="bi bi-layout-sidebar-inset me-1"></i>Menu / Modul yang Boleh Dilihat:</h4>
+            <div class="list-group list-group-flush" id="menuPermissionsList">
+              <label class="list-group-item d-flex justify-content-between align-items-center bg-transparent border-0 py-2">
+                <div>
+                  <strong class="d-block small">Executive Dashboard</strong>
+                  <small class="text-muted">Melihat grafik analitik, ringkasan KPI, dan kualitas data.</small>
+                </div>
+                <input class="form-check-input menu-perm-check" type="checkbox" value="dashboard" id="perm_dashboard">
+              </label>
+
+              <label class="list-group-item d-flex justify-content-between align-items-center bg-transparent border-0 py-2">
+                <div>
+                  <strong class="d-block small">Material Master (Katalog &amp; Cari)</strong>
+                  <small class="text-muted">Pencarian data master material dan tabel inventori.</small>
+                </div>
+                <input class="form-check-input menu-perm-check" type="checkbox" value="materials" id="perm_materials">
+              </label>
+
+              <label class="list-group-item d-flex justify-content-between align-items-center bg-transparent border-0 py-2">
+                <div>
+                  <strong class="d-block small">Similar Material (Substitusi)</strong>
+                  <small class="text-muted">Melihat alternatif merk (brand cross-reference) dan substitusi.</small>
+                </div>
+                <input class="form-check-input menu-perm-check" type="checkbox" value="similarity" id="perm_similarity">
+              </label>
+
+              <label class="list-group-item d-flex justify-content-between align-items-center bg-transparent border-0 py-2">
+                <div>
+                  <strong class="d-block small">Upload Material Master</strong>
+                  <small class="text-muted">Mengunggah berkas Excel/CSV material baru ke sistem.</small>
+                </div>
+                <input class="form-check-input menu-perm-check" type="checkbox" value="upload" id="perm_upload">
+              </label>
+
+              <label class="list-group-item d-flex justify-content-between align-items-center bg-transparent border-0 py-2">
+                <div>
+                  <strong class="d-block small">Duplicate Review &amp; Clustering</strong>
+                  <small class="text-muted">Melihat kandidat duplikat dan komparasi berdampingan.</small>
+                </div>
+                <input class="form-check-input menu-perm-check" type="checkbox" value="duplicates" id="perm_duplicates">
+              </label>
+
+              <label class="list-group-item d-flex justify-content-between align-items-center bg-transparent border-0 py-2">
+                <div>
+                  <strong class="d-block small">Pengaturan User &amp; Hak Akses</strong>
+                  <small class="text-muted">Mengelola akun user dan mengubah hak akses peran.</small>
+                </div>
+                <input class="form-check-input menu-perm-check" type="checkbox" value="users" id="perm_users">
+              </label>
+
+              <label class="list-group-item d-flex justify-content-between align-items-center bg-transparent border-0 py-2">
+                <div>
+                  <strong class="d-block small">Pengaturan Koneksi Sistem</strong>
+                  <small class="text-muted">Mengatur kredensial dan URL database Supabase.</small>
+                </div>
+                <input class="form-check-input menu-perm-check" type="checkbox" value="settings" id="perm_settings">
+              </label>
+            </div>
+          </div>
+
+          <!-- Hak Aksi Khusus -->
+          <div class="col-md-5">
+            <h4 class="small fw-bold text-accent mb-3"><i class="bi bi-toggles me-1"></i>Izin Tindakan Khusus:</h4>
+            
+            <div class="form-check form-switch mb-3">
+              <input class="form-check-input" type="checkbox" id="actionPermUpload">
+              <label class="form-check-label small" for="actionPermUpload">
+                <strong>Boleh Upload Data Baru</strong>
+                <span class="text-muted d-block small">Mengizinkan upload spreadsheet material master.</span>
+              </label>
+            </div>
+
+            <div class="form-check form-switch mb-3">
+              <input class="form-check-input" type="checkbox" id="actionPermRunAi">
+              <label class="form-check-label small" for="actionPermRunAi">
+                <strong>Boleh Menjalankan Analisis AI</strong>
+                <span class="text-muted d-block small">Mengizinkan pemicu eksekusi AI duplicate engine.</span>
+              </label>
+            </div>
+
+            <div class="form-check form-switch mb-3">
+              <input class="form-check-input" type="checkbox" id="actionPermMerge">
+              <label class="form-check-label small" for="actionPermMerge">
+                <strong>Boleh Merge / Obsolete Duplikat</strong>
+                <span class="text-muted d-block small">Mengizinkan eksekusi penggabungan stok ke Golden Record.</span>
+              </label>
+            </div>
+
+            <div class="form-check form-switch mb-3">
+              <input class="form-check-input" type="checkbox" id="actionPermSettings">
+              <label class="form-check-label small" for="actionPermSettings">
+                <strong>Boleh Ubah Pengaturan Database</strong>
+                <span class="text-muted d-block small">Mengizinkan modifikasi URL &amp; Key Supabase.</span>
+              </label>
+            </div>
+
+            <div class="pt-3 border-top mt-4">
+              <button id="savePermissionsBtn" type="button" class="btn btn-accent w-100">
+                <i class="bi bi-check-circle me-1"></i>Simpan Hak Akses Peran Ini
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel 2: Daftar Pengguna Sistem -->
+      <div id="panel-users-list" class="panel d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h3 class="h6 mb-0">Daftar Akun Pengguna</h3>
+          <span class="text-muted small">Kelola kredensial akun operator dan administrator</span>
+        </div>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Username</th>
+                <th>Nama Lengkap</th>
+                <th>Peran</th>
+                <th>Status</th>
+                <th>Dibuat Pada</th>
+                <th>Aksi</th>
+              </tr>
+            </thead>
+            <tbody id="userTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- PENGATURAN KONEKSI SUPABASE -->
+    <section id="section-settings" class="content-section">
+      <div class="section-head">
+        <div>
+          <h2>Pengaturan Koneksi Supabase</h2>
+          <p>Kelola koneksi backend Google Apps Script ke database Supabase PostgreSQL.</p>
+        </div>
+      </div>
+
+      <article class="panel settings-card">
+        <div class="d-flex justify-content-between align-items-center mb-4 pb-3 border-bottom">
+          <div>
+            <h3 class="h5 mb-1">Status Koneksi Saat Ini</h3>
+            <p id="configMessage" class="text-muted mb-0 small">Memeriksa status koneksi...</p>
+          </div>
+          <span id="connectionBadge" class="status-badge disconnected">
+            <i class="bi bi-circle-fill" style="font-size: 8px;"></i>
+            <span id="badgeText">Disconnected</span>
+          </span>
+        </div>
+
+        <form id="settingsForm" onsubmit="return false;">
+          <div class="form-group mb-3">
+            <label for="supabaseUrlInput">Project URL Supabase</label>
+            <input id="supabaseUrlInput" type="url" class="form-control-custom" placeholder="https://<project-ref>.supabase.co" required>
+            <small class="text-muted">Contoh: https://tayybadwfypmedjixemd.supabase.co</small>
+          </div>
+
+          <div class="form-group mb-4">
+            <label for="supabaseKeyInput">Service Role Key (Secret Key)</label>
+            <div class="input-group">
+              <input id="supabaseKeyInput" type="password" class="form-control-custom" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." required>
+              <button id="toggleKeyVisibility" type="button" class="btn btn-outline-accent"><i class="bi bi-eye"></i></button>
+            </div>
+            <small class="text-muted">Kunci rahasia dari Supabase Dashboard -> Project Settings -> API -> Project API keys (service_role secret).</small>
+          </div>
+
+          <div class="d-flex gap-2">
+            <button id="saveConfigBtn" type="button" class="btn btn-accent">
+              <i class="bi bi-check-circle"></i> Simpan Konfigurasi
+            </button>
+            <button id="testConnectionBtn" type="button" class="btn btn-outline-accent">
+              <i class="bi bi-arrow-repeat"></i> Tes Koneksi
+            </button>
+          </div>
+        </form>
+
+        <div class="security-note mt-4">
+          <i class="bi bi-shield-check"></i>
+          <div>
+            <strong>Keamanan Kredensial</strong>
+            <p>Service Role Key disimpan secara aman di <code>PropertiesService</code> Google Apps Script server-side, tidak pernah disimpan di cookies atau terekspos ke pengunjung web.</p>
+          </div>
+        </div>
+
+        <div class="security-note mt-2" style="background: rgba(59,130,246,.08); border-color: rgba(59,130,246,.3);">
+          <i class="bi bi-database-check" style="color: var(--info);"></i>
+          <div>
+            <strong>Setup Tabel Supabase</strong>
+            <p>Pastikan Anda sudah mengeksekusi skrip <code>SETUP_SUPABASE.sql</code> di menu <strong>SQL Editor</strong> di dashboard Supabase agar tabel, view, dan fungsi yang diperlukan tersedia.</p>
+          </div>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <!-- DUPLICATE SIDE-BY-SIDE REVIEW MODAL -->
+  <div class="modal fade" id="duplicateDetailModal" tabindex="-1" aria-labelledby="dupModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+      <div class="modal-content panel p-0 border-0">
+        <div class="modal-header border-bottom p-3 d-flex justify-content-between align-items-center">
+          <div class="d-flex align-items-center gap-2">
+            <h5 class="modal-title h6 mb-0" id="dupModalLabel"><i class="bi bi-intersect text-danger me-2"></i>Review Duplikasi &amp; Rasionalisasi</h5>
+            <span id="modalClusterBadge" class="badge bg-primary">CLUST-0001</span>
+            <span id="modalCandidateBadge" class="badge bg-secondary">DUP-0001</span>
+          </div>
+          <div class="d-flex align-items-center gap-2">
+            <span id="modalScoreBadge" class="badge-score score-high">98.5%</span>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
+          </div>
+        </div>
+
+        <div class="modal-body p-4">
+          <!-- Side-by-Side Comparison Grid -->
+          <div class="row g-3">
+            <!-- Material A -->
+            <div class="col-md-6">
+              <div class="card p-3 border h-100" id="cardMaterialA" style="background: var(--surface-2);">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                  <span class="badge bg-secondary">Material A</span>
+                  <span id="badgeMasterA" class="badge bg-success d-none"><i class="bi bi-star-fill me-1"></i>Rekomendasi Golden Master</span>
+                </div>
+                <h4 id="detailCodeA" class="h6 mb-2 text-accent">100001</h4>
+                <div class="mb-2">
+                  <small class="text-muted d-block">Deskripsi:</small>
+                  <strong id="detailDescA" class="d-block text-wrap">-</strong>
+                </div>
+                <div class="row g-2 mb-2">
+                  <div class="col-6">
+                    <small class="text-muted d-block">Pabrikan / Brand:</small>
+                    <span id="detailMfrA">-</span>
+                  </div>
+                  <div class="col-6">
+                    <small class="text-muted d-block">Part Number:</small>
+                    <span id="detailPnA">-</span>
+                  </div>
+                </div>
+                <div class="row g-2 pt-2 border-top">
+                  <div class="col-6">
+                    <small class="text-muted d-block">Jumlah Stok:</small>
+                    <span id="detailQtyA">0 EA</span>
+                  </div>
+                  <div class="col-6">
+                    <small class="text-muted d-block">Nilai Stok:</small>
+                    <strong id="detailValA" class="text-success">Rp 0</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Material B -->
+            <div class="col-md-6">
+              <div class="card p-3 border h-100" id="cardMaterialB" style="background: var(--surface-2);">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                  <span class="badge bg-secondary">Material B</span>
+                  <span id="badgeMasterB" class="badge bg-success d-none"><i class="bi bi-star-fill me-1"></i>Rekomendasi Golden Master</span>
+                </div>
+                <h4 id="detailCodeB" class="h6 mb-2 text-accent">100002</h4>
+                <div class="mb-2">
+                  <small class="text-muted d-block">Deskripsi:</small>
+                  <strong id="detailDescB" class="d-block text-wrap">-</strong>
+                </div>
+                <div class="row g-2 mb-2">
+                  <div class="col-6">
+                    <small class="text-muted d-block">Pabrikan / Brand:</small>
+                    <span id="detailMfrB">-</span>
+                  </div>
+                  <div class="col-6">
+                    <small class="text-muted d-block">Part Number:</small>
+                    <span id="detailPnB">-</span>
+                  </div>
+                </div>
+                <div class="row g-2 pt-2 border-top">
+                  <div class="col-6">
+                    <small class="text-muted d-block">Jumlah Stok:</small>
+                    <span id="detailQtyB">0 EA</span>
+                  </div>
+                  <div class="col-6">
+                    <small class="text-muted d-block">Nilai Stok:</small>
+                    <strong id="detailValB" class="text-success">Rp 0</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- AI Explainability Card -->
+          <div class="card p-3 border mt-3" style="background: rgba(0, 200, 150, 0.05); border-color: rgba(0, 200, 150, 0.25) !important;">
+            <div class="d-flex align-items-center gap-2 mb-2">
+              <i class="bi bi-stars text-accent fs-5"></i>
+              <strong class="text-accent">AI Explainability &amp; Faktor Kesamaan</strong>
+            </div>
+            
+            <p id="detailAiExplanation" class="small mb-3 text-muted">Memuat penjelasan...</p>
+
+            <div class="row g-2 text-center small">
+              <div class="col-3">
+                <div class="p-2 border rounded" style="background: var(--surface);">
+                  <div class="text-muted small">Part Number</div>
+                  <strong id="factorScorePn" class="text-accent">100%</strong>
+                </div>
+              </div>
+              <div class="col-3">
+                <div class="p-2 border rounded" style="background: var(--surface);">
+                  <div class="text-muted small">Pabrikan</div>
+                  <strong id="factorScoreMfr" class="text-accent">100%</strong>
+                </div>
+              </div>
+              <div class="col-3">
+                <div class="p-2 border rounded" style="background: var(--surface);">
+                  <div class="text-muted small">Deskripsi</div>
+                  <strong id="factorScoreDesc" class="text-accent">95%</strong>
+                </div>
+              </div>
+              <div class="col-3">
+                <div class="p-2 border rounded" style="background: var(--surface);">
+                  <div class="text-muted small">Atribut / Grup</div>
+                  <strong id="factorScoreAttr" class="text-accent">90%</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Keputusan Rasionalisasi -->
+          <div class="card p-3 border mt-3" style="background: var(--surface);">
+            <h6 class="small fw-bold mb-2">Keputusan Rasionalisasi</h6>
+            <div class="row g-2 align-items-center mb-3">
+              <div class="col-md-6">
+                <label class="small text-muted mb-1 d-block">Pilih Material Sebagai Master Record (Golden Record):</label>
+                <div class="d-flex gap-3">
+                  <div class="form-check">
+                    <input class="form-check-input" type="radio" name="masterSelection" id="selectMasterA" value="A">
+                    <label class="form-check-label small" for="selectMasterA" id="labelMasterA">Material A</label>
+                  </div>
+                  <div class="form-check">
+                    <input class="form-check-input" type="radio" name="masterSelection" id="selectMasterB" value="B">
+                    <label class="form-check-label small" for="selectMasterB" id="labelMasterB">Material B</label>
+                  </div>
+                </div>
+              </div>
+              <div class="col-md-6">
+                <label class="small text-muted mb-1 d-block">Potensi Efisiensi Penggabungan:</label>
+                <span id="detailPotentialSavings" class="badge bg-success fs-6 p-2">Rp 0</span>
+              </div>
+            </div>
+            <div>
+              <label for="reviewNotesInput" class="small text-muted mb-1">Catatan Keputusan Review (Opsional):</label>
+              <input id="reviewNotesInput" type="text" class="form-control-custom" placeholder="Contoh: Terkonfirmasi fisik bearing identik, gabungkan stok ke 100001.">
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer border-top p-3 d-flex justify-content-between">
+          <button id="btnRejectDuplicate" type="button" class="btn btn-outline-danger btn-sm">
+            <i class="bi bi-x-circle me-1"></i>Bukan Duplikat (Tolak)
+          </button>
+          <div class="d-flex gap-2">
+            <button id="btnConfirmDuplicate" type="button" class="btn btn-outline-accent btn-sm">
+              <i class="bi bi-check me-1"></i>Konfirmasi Duplikat
+            </button>
+            <button id="btnMergeDuplicate" type="button" class="btn btn-accent btn-sm">
+              <i class="bi bi-diagram-2-fill me-1"></i>Gabungkan (Merge &amp; Obsolete)
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADMIN LOGIN MODAL -->
+  <div class="modal fade" id="adminLoginModal" tabindex="-1" aria-labelledby="adminLoginModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content panel p-0 border-0">
+        <div class="modal-header border-bottom p-3">
+          <h5 class="modal-title h6 mb-0" id="adminLoginModalLabel"><i class="bi bi-shield-lock-fill text-accent me-2"></i>Login Administrator</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
+        </div>
+        <form id="adminLoginForm" onsubmit="return false;">
+          <div class="modal-body p-4">
+            <div class="text-center mb-3">
+              <span class="brand-icon mx-auto mb-2" style="width:48px; height:48px; font-size:24px;"><i class="bi bi-person-badge"></i></span>
+              <h6 class="mb-1">Masuk dengan Akun Admin</h6>
+              <p class="text-muted small mb-0">Mode pengunjung (guest) tetap dapat menggunakan menu umum tanpa harus login.</p>
+            </div>
+            <div class="form-group mb-3">
+              <label for="loginUsername">Username</label>
+              <input id="loginUsername" type="text" class="form-control-custom" placeholder="admin" required autofocus>
+            </div>
+            <div class="form-group mb-3">
+              <label for="loginPassword">Password</label>
+              <input id="loginPassword" type="password" class="form-control-custom" placeholder="Masukkan password admin" required>
+              <small class="text-muted">Default admin: <code>admin</code> / <code>admin123</code></small>
+            </div>
+          </div>
+          <div class="modal-footer border-top p-3 d-flex justify-content-end gap-2">
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+            <button id="submitLoginBtn" type="submit" class="btn btn-sm btn-accent"><i class="bi bi-box-arrow-in-right me-1"></i>Masuk</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- USER CREATE/EDIT MODAL -->
+  <div class="modal fade" id="userFormModal" tabindex="-1" aria-labelledby="userFormModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content panel p-0 border-0">
+        <div class="modal-header border-bottom p-3">
+          <h5 class="modal-title h6 mb-0" id="userFormModalLabel"><i class="bi bi-person-fill text-accent me-2"></i>Tambah / Edit Pengguna</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
+        </div>
+        <form id="userForm" onsubmit="return false;">
+          <input type="hidden" id="editUserId" value="">
+          <div class="modal-body p-4">
+            <div class="form-group mb-3">
+              <label for="userFormUsername">Username</label>
+              <input id="userFormUsername" type="text" class="form-control-custom" placeholder="Contoh: operator1" required>
+            </div>
+            <div class="form-group mb-3">
+              <label for="userFormFullName">Nama Lengkap</label>
+              <input id="userFormFullName" type="text" class="form-control-custom" placeholder="Nama Operator / Staff" required>
+            </div>
+            <div class="form-group mb-3">
+              <label for="userFormRole">Peran (Role)</label>
+              <select id="userFormRole" class="form-control-custom" required>
+                <option value="OPERATOR">OPERATOR (Operator Cleansing)</option>
+                <option value="ADMIN">ADMIN (Administrator Penuh)</option>
+                <option value="GUEST">GUEST (Viewer Terbatas)</option>
+              </select>
+            </div>
+            <div class="form-group mb-3">
+              <label for="userFormPassword">Password <span id="pwdRequiredHint" class="text-danger">*</span></label>
+              <input id="userFormPassword" type="password" class="form-control-custom" placeholder="Minimal 6 karakter">
+              <small id="pwdOptionalHint" class="text-muted d-none">Kosongkan jika tidak ingin mengubah password.</small>
+            </div>
+            <div class="form-check form-switch mt-3">
+              <input class="form-check-input" type="checkbox" id="userFormActive" checked>
+              <label class="form-check-label small" for="userFormActive">Akun Aktif</label>
+            </div>
+          </div>
+          <div class="modal-footer border-top p-3 d-flex justify-content-end gap-2">
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+            <button id="saveUserSubmitBtn" type="submit" class="btn btn-sm btn-accent"><i class="bi bi-save me-1"></i>Simpan</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- LOGOUT MODAL -->
+  <div class="modal fade" id="logoutModal" tabindex="-1" aria-labelledby="logoutModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content panel p-0 border-0">
+        <div class="modal-header border-bottom p-3">
+          <h5 class="modal-title h6 mb-0" id="logoutModalLabel"><i class="bi bi-box-arrow-right text-danger me-2"></i>Konfirmasi Keluar</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
+        </div>
+        <div class="modal-body p-4 text-center">
+          <div class="mb-3">
+            <i class="bi bi-shield-lock text-warning" style="font-size: 3rem;"></i>
+          </div>
+          <h6>Apakah Anda yakin ingin keluar dari sistem?</h6>
+          <p class="text-muted small mb-0">Sesi saat ini akan diakhiri dan Anda akan dialihkan keluar.</p>
+        </div>
+        <div class="modal-footer border-top p-3 d-flex justify-content-end gap-2">
+          <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+          <button id="confirmLogoutBtn" type="button" class="btn btn-sm btn-danger"><i class="bi bi-box-arrow-right me-1"></i>Ya, Keluar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="app-toast" role="status" aria-live="polite"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<?!= include('JavaScript'); ?>
+</body>
+</html>

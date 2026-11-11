@@ -1,0 +1,26 @@
+# Node dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment & Credentials
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Temporary files & logs
+logs/
+*.log
+.DS_Store
+Thumbs.db
+
+# OS / Editor
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
