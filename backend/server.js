@@ -389,23 +389,57 @@ app.post('/api/duplicates/decision', async (req, res) => {
     const { candidateId, decision, selectedMaster, notes, reviewerName } = req.body;
     if (!candidateId) return apiResponse(res, 400, false, null, 'Candidate ID wajib diisi.');
 
-    // 1. Update duplicate_analysis
-    await supabaseFetch(`duplicate_analysis?candidate_id=eq.${encodeURIComponent(candidateId)}`, {
-      method: 'PATCH',
-      body: {
-        review_status: decision,
-        assigned_reviewer: reviewerName || 'admin',
-        review_notes: notes || null,
-        reviewed_at: new Date().toISOString()
-      }
-    });
+    const reviewer = reviewerName || 'admin';
+    const reviewedAt = new Date().toISOString();
+    const encodedId = encodeURIComponent(candidateId);
 
-    // 2. Jika MERGE_AND_OBSOLETE, perbarui master material
-    if (decision === 'MERGE_AND_OBSOLETE' && selectedMaster) {
-      await supabaseFetch(`material_raw?material_code=eq.${encodeURIComponent(selectedMaster)}`, {
+    // 1. Update duplicate_analysis (fallback ke match_factors JSONB bila kolom review belum ada)
+    try {
+      await supabaseFetch(`duplicate_analysis?candidate_id=eq.${encodedId}`, {
         method: 'PATCH',
-        body: { status: 'ACTIVE_GOLDEN' }
+        body: {
+          review_status: decision,
+          recommended_master_code: selectedMaster || null,
+          assigned_reviewer: reviewer,
+          review_notes: notes || null,
+          reviewed_at: reviewedAt
+        }
       });
+    } catch (patchErr) {
+      if (!/PGRST204|Could not find|does not exist/i.test(String(patchErr.message || patchErr))) {
+        throw patchErr;
+      }
+      let existingFactors = {};
+      try {
+        const cur = await supabaseFetch(`duplicate_analysis?candidate_id=eq.${encodedId}&select=match_factors&limit=1`);
+        if (cur && cur[0] && cur[0].match_factors && typeof cur[0].match_factors === 'object') {
+          existingFactors = cur[0].match_factors;
+        }
+      } catch (_) {}
+
+      await supabaseFetch(`duplicate_analysis?candidate_id=eq.${encodedId}`, {
+        method: 'PATCH',
+        body: {
+          review_status: decision,
+          recommended_master_code: selectedMaster || null,
+          match_factors: {
+            ...existingFactors,
+            assigned_reviewer: reviewer,
+            review_notes: notes || null,
+            reviewed_at: reviewedAt
+          }
+        }
+      });
+    }
+
+    // 2. Jika MERGE_AND_OBSOLETE, perbarui master material (best-effort)
+    if (decision === 'MERGE_AND_OBSOLETE' && selectedMaster) {
+      try {
+        await supabaseFetch(`material_raw?material_code=eq.${encodeURIComponent(selectedMaster)}`, {
+          method: 'PATCH',
+          body: { status: 'ACTIVE_GOLDEN' }
+        });
+      } catch (_) {}
     }
 
     return apiResponse(res, 200, true, null, 'Keputusan review berhasil disimpan.');
@@ -438,6 +472,11 @@ app.get('/api/reports/approved-duplicates', async (req, res) => {
     const clusters = new Set();
 
     rows.forEach(r => {
+      const mf = (r.match_factors && typeof r.match_factors === 'object') ? r.match_factors : {};
+      if (!r.assigned_reviewer && mf.assigned_reviewer) r.assigned_reviewer = mf.assigned_reviewer;
+      if (!r.review_notes && mf.review_notes) r.review_notes = mf.review_notes;
+      if (!r.reviewed_at && mf.reviewed_at) r.reviewed_at = mf.reviewed_at;
+
       totalSavings += Number(r.potential_saving) || 0;
       totalStockVal += (Number(r.val_a) || 0) + (Number(r.val_b) || 0);
       scoreSum += Number(r.duplicate_score) || 0;

@@ -287,6 +287,9 @@ ALTER TABLE public.duplicate_analysis ADD COLUMN IF NOT EXISTS recommendation TE
 ALTER TABLE public.duplicate_analysis ADD COLUMN IF NOT EXISTS ai_explanation TEXT;
 ALTER TABLE public.duplicate_analysis ADD COLUMN IF NOT EXISTS match_factors JSONB;
 ALTER TABLE public.duplicate_analysis ADD COLUMN IF NOT EXISTS review_status TEXT DEFAULT 'PENDING';
+ALTER TABLE public.duplicate_analysis ADD COLUMN IF NOT EXISTS assigned_reviewer TEXT;
+ALTER TABLE public.duplicate_analysis ADD COLUMN IF NOT EXISTS review_notes TEXT;
+ALTER TABLE public.duplicate_analysis ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
 
 -- 2. Perbarui kolom tabel similar_material
 ALTER TABLE public.similar_material ADD COLUMN IF NOT EXISTS material_a TEXT;

@@ -1078,8 +1078,11 @@
       const scoreBadgeClass = sc >= 95 ? 'score-high' : sc >= 85 ? 'score-mid' : 'score-low';
       const statusBadge = x.review_status === 'MERGE_AND_OBSOLETE' ? 'bg-primary' : 'bg-success';
       const statusText = x.review_status === 'MERGE_AND_OBSOLETE' ? 'Merged &amp; Obsolete' : 'Approved Duplicate';
-      const reviewer = x.assigned_reviewer || 'admin';
-      const reviewDate = x.reviewed_at ? new Date(x.reviewed_at).toLocaleDateString('id-ID') : '-';
+      const mf = (x.match_factors && typeof x.match_factors === 'object') ? x.match_factors : {};
+      const reviewer = x.assigned_reviewer || mf.assigned_reviewer || 'admin';
+      const rawDate = x.reviewed_at || mf.reviewed_at;
+      const reviewDate = rawDate ? new Date(rawDate).toLocaleDateString('id-ID') : '-';
+      const reviewNotes = x.review_notes || mf.review_notes || '';
 
       return `
         <tr>
@@ -1117,7 +1120,7 @@
             <span class="badge ${statusBadge}">${statusText}</span>
             <small class="d-block text-muted mt-1">By: <strong>${escapeHtml(reviewer)}</strong></small>
             <small class="text-muted">${reviewDate}</small>
-            ${x.review_notes ? `<small class="text-muted d-block fst-italic">"${escapeHtml(x.review_notes)}"</small>` : ''}
+            ${reviewNotes ? `<small class="text-muted d-block fst-italic">"${escapeHtml(reviewNotes)}"</small>` : ''}
           </td>
         </tr>
       `;
@@ -1196,9 +1199,9 @@
         x.confidence_level || '',
         Number(x.potential_saving) || 0,
         x.review_status || '',
-        x.assigned_reviewer || generatedBy,
-        x.reviewed_at ? new Date(x.reviewed_at).toLocaleDateString('id-ID') : '',
-        x.review_notes || '',
+        x.assigned_reviewer || (x.match_factors && x.match_factors.assigned_reviewer) || generatedBy,
+        (x.reviewed_at || (x.match_factors && x.match_factors.reviewed_at)) ? new Date(x.reviewed_at || x.match_factors.reviewed_at).toLocaleDateString('id-ID') : '',
+        x.review_notes || (x.match_factors && x.match_factors.review_notes) || '',
         x.ai_explanation || ''
       ]);
     });

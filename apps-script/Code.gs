@@ -606,23 +606,52 @@ function saveDuplicateDecision(candidateId, decision, masterCode, notes, reviewe
     if (allowed.indexOf(decision) === -1) throw new Error('Keputusan review tidak valid.');
 
     const email = reviewerName || Session.getActiveUser().getEmail() || 'admin';
-    
-    // Update status di tabel duplicate_analysis
-    supabaseRequest_('duplicate_analysis?candidate_id=eq.' + encodeURIComponent(candidateId), 'patch', {
-      review_status: decision,
-      recommended_master_code: masterCode || null,
-      assigned_reviewer: email,
-      review_notes: notes || null,
-      reviewed_at: new Date().toISOString()
-    });
+    const reviewedAt = new Date().toISOString();
+    const encodedId = encodeURIComponent(candidateId);
 
-    // Simpan keputusan ke tabel review_decision
-    supabaseRequest_('review_decision', 'post', [{
-      queue_id: null,
-      reviewer_email: email,
-      decision: decision + (masterCode ? ' (Master: ' + masterCode + ')' : ''),
-      decision_note: String(notes || '').slice(0, 1000)
-    }], { Prefer: 'return=minimal' });
+    // Update status di tabel duplicate_analysis (fallback ke match_factors JSONB bila kolom review belum ada di DB)
+    try {
+      supabaseRequest_('duplicate_analysis?candidate_id=eq.' + encodedId, 'patch', {
+        review_status: decision,
+        recommended_master_code: masterCode || null,
+        assigned_reviewer: email,
+        review_notes: notes || null,
+        reviewed_at: reviewedAt
+      });
+    } catch (patchErr) {
+      if (!/PGRST204|Could not find|does not exist/i.test(String(patchErr.message || patchErr))) {
+        throw patchErr;
+      }
+      let existingFactors = {};
+      try {
+        const cur = supabaseRequest_('duplicate_analysis?candidate_id=eq.' + encodedId + '&select=match_factors&limit=1', 'get');
+        if (cur && cur[0] && cur[0].match_factors && typeof cur[0].match_factors === 'object') {
+          existingFactors = cur[0].match_factors;
+        }
+      } catch (_) {}
+
+      const mergedFactors = Object.assign({}, existingFactors, {
+        assigned_reviewer: email,
+        review_notes: notes || null,
+        reviewed_at: reviewedAt
+      });
+
+      supabaseRequest_('duplicate_analysis?candidate_id=eq.' + encodedId, 'patch', {
+        review_status: decision,
+        recommended_master_code: masterCode || null,
+        match_factors: mergedFactors
+      });
+    }
+
+    // Simpan log keputusan ke tabel review_decision (best-effort)
+    try {
+      supabaseRequest_('review_decision', 'post', [{
+        queue_id: null,
+        reviewer_email: email,
+        decision: decision + (masterCode ? ' (Master: ' + masterCode + ')' : ''),
+        decision_note: String(notes || '').slice(0, 1000)
+      }], { Prefer: 'return=minimal' });
+    } catch (_) {}
 
     writeAudit_('DUPLICATE_REVIEW', decision, candidateId, 'Keputusan: ' + decision + ' | Master: ' + (masterCode || '-') + ' | Catatan: ' + (notes || '-'));
     return response_(true, { candidateId: candidateId, status: decision }, 'Keputusan berhasil disimpan.');
@@ -654,6 +683,11 @@ function getApprovedDuplicatesReport(statusFilter) {
     const clusters = new Set();
 
     rows.forEach(r => {
+      const mf = (r.match_factors && typeof r.match_factors === 'object') ? r.match_factors : {};
+      if (!r.assigned_reviewer && mf.assigned_reviewer) r.assigned_reviewer = mf.assigned_reviewer;
+      if (!r.review_notes && mf.review_notes) r.review_notes = mf.review_notes;
+      if (!r.reviewed_at && mf.reviewed_at) r.reviewed_at = mf.reviewed_at;
+
       totalSavings += Number(r.potential_saving) || 0;
       totalStockVal += (Number(r.val_a) || 0) + (Number(r.val_b) || 0);
       scoreSum += Number(r.duplicate_score) || 0;
