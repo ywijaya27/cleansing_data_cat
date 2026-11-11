@@ -636,3 +636,65 @@ body {
 @media(max-width: 390px) {
   .kpi-grid { grid-template-columns: 1fr; }
 }
+
+/* =============================================================================
+ * PRINT-READY STYLES (LAPORAN RESMI PDF / CETAK)
+ * ============================================================================= */
+@media print {
+  body, html {
+    background: #ffffff !important;
+    color: #111111 !important;
+    font-size: 10pt !important;
+  }
+  .sidebar, .topbar, .d-print-none, .btn, .modal, .app-toast, #loadingOverlay {
+    display: none !important;
+  }
+  .main-content {
+    margin-left: 0 !important;
+    padding: 0 !important;
+  }
+  .content-section {
+    display: none !important;
+    padding: 0 !important;
+  }
+  .content-section.active {
+    display: block !important;
+  }
+  .panel, .kpi-card, .report-header-card {
+    background: #ffffff !important;
+    border: 1px solid #d0d7de !important;
+    color: #111111 !important;
+    box-shadow: none !important;
+    page-break-inside: avoid;
+  }
+  .data-table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+  }
+  .data-table th, .data-table td {
+    border: 1px solid #d0d7de !important;
+    color: #111111 !important;
+    padding: 6px 8px !important;
+    font-size: 8.5pt !important;
+  }
+  .badge {
+    border: 1px solid #8c959f !important;
+    color: #111111 !important;
+    background: transparent !important;
+  }
+  .kpi-grid {
+    grid-template-columns: repeat(4, 1fr) !important;
+    gap: 8px !important;
+  }
+  .kpi-value {
+    font-size: 16pt !important;
+    color: #111111 !important;
+  }
+  .print-signature-section {
+    display: block !important;
+    page-break-inside: avoid;
+  }
+  .d-print-block {
+    display: block !important;
+  }
+}

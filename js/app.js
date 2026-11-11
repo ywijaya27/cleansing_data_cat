@@ -35,6 +35,7 @@
     materials: 'Material Master',
     duplicates: 'Duplicate Review',
     similarity: 'Similar Material',
+    reports: 'Laporan Efisiensi Approved Duplicates',
     users: 'User & Hak Akses (RBAC)',
     settings: 'Pengaturan'
   };
@@ -98,18 +99,19 @@
 
   function isMenuAllowed(section) {
     if (state.currentUser.role === 'ADMIN') return true;
-    const allowed = state.accessControl?.allowed_menus || ['dashboard', 'materials', 'similarity'];
+    if (section === 'reports') return true;
+    const allowed = state.accessControl?.allowed_menus || ['dashboard', 'materials', 'similarity', 'reports'];
     return allowed.includes(section);
   }
 
   function applyAccessControl() {
     const isAdm = (state.currentUser.role === 'ADMIN');
-    const allowedMenus = state.accessControl?.allowed_menus || ['dashboard', 'materials', 'similarity'];
+    const allowedMenus = state.accessControl?.allowed_menus || ['dashboard', 'materials', 'similarity', 'reports'];
 
     // Update Sidebar Navigation Items
     document.querySelectorAll('.nav-item').forEach(el => {
       const sec = el.dataset.section;
-      const allowed = isAdm || allowedMenus.includes(sec);
+      const allowed = isAdm || sec === 'reports' || allowedMenus.includes(sec);
       el.classList.toggle('locked', !allowed);
     });
 
@@ -168,9 +170,12 @@
     if (section === 'materials') loadMaterials();
     if (section === 'duplicates') loadDuplicates();
     if (section === 'similarity') loadSimilarity();
+    if (section === 'reports') loadApprovedReport();
     if (section === 'upload') loadUploadHistory();
     if (section === 'users') loadUserManagement();
   }
+
+  window.navigateToSection = navigateTo;
 
   /**
    * Inisialisasi Aplikasi
@@ -329,6 +334,12 @@
 
     // Filter Similarity
     if ($('simTypeFilter')) $('simTypeFilter').addEventListener('change', renderSimilarityTable);
+
+    // Laporan Efisiensi Actions
+    if ($('openReportSectionBtn')) $('openReportSectionBtn').addEventListener('click', () => navigateTo('reports'));
+    if ($('exportReportExcelBtn')) $('exportReportExcelBtn').addEventListener('click', exportReportExcel);
+    if ($('printReportBtn')) $('printReportBtn').addEventListener('click', () => window.print());
+    if ($('reportStatusFilter')) $('reportStatusFilter').addEventListener('change', loadApprovedReport);
 
     // Modal Actions Review Duplicate
     if ($('btnMergeDuplicate')) $('btnMergeDuplicate').addEventListener('click', () => handleSaveDuplicateDecision('MERGE_AND_OBSOLETE'));
@@ -880,7 +891,8 @@
 
     try {
       showLoading(true, 'Menyimpan keputusan review...');
-      const r = await callServer('saveDuplicateDecision', item.candidate_id, decision, selectedMaster, notes);
+      const reviewer = state.currentUser.full_name || state.currentUser.fullName || state.currentUser.username || 'admin';
+      const r = await callServer('saveDuplicateDecision', item.candidate_id, decision, selectedMaster, notes, reviewer);
       toast(r.message || 'Keputusan berhasil disimpan.', 'success');
 
       // Tutup modal
@@ -948,6 +960,251 @@
         </tr>
       `;
     }).join('');
+  }
+
+  /**
+   * LAPORAN EFISIENSI & APPROVED DUPLICATES
+   */
+  async function loadApprovedReport() {
+    // 1. Tampilkan informasi user yang sedang login di kop laporan
+    const currentUser = state.currentUser || {};
+    const fullName = currentUser.full_name || currentUser.fullName || (currentUser.username === 'admin' ? 'Administrator Sistem' : currentUser.username) || 'Pengunjung (Guest)';
+    const username = currentUser.username || 'guest';
+    const role = currentUser.role || 'GUEST';
+
+    if ($('reportByUserName')) $('reportByUserName').textContent = fullName;
+    if ($('reportByUserAccount')) $('reportByUserAccount').textContent = username;
+    if ($('reportByUserRole')) {
+      $('reportByUserRole').textContent = `(Role: ${role})`;
+    }
+    if ($('reportGeneratedDate')) {
+      $('reportGeneratedDate').textContent = new Date().toLocaleString('id-ID', { dateStyle: 'full', timeStyle: 'short' });
+    }
+    if ($('printSignName')) $('printSignName').textContent = fullName;
+    if ($('printSignRole')) $('printSignRole').textContent = `Reviewer (${role})`;
+
+    const filterVal = $('reportStatusFilter')?.value || 'APPROVED_DUPLICATE';
+    if ($('reportFilterBadge')) {
+      const label = filterVal === 'ALL_APPROVED' ? 'STATUS: APPROVED & MERGED' :
+                    filterVal === 'MERGE_AND_OBSOLETE' ? 'STATUS: MERGE & OBSOLETE' : 'STATUS: APPROVED DUPLICATE';
+      $('reportFilterBadge').innerHTML = `<i class="bi bi-check-circle-fill me-1"></i>${label}`;
+    }
+
+    try {
+      showLoading(true, 'Memuat data laporan efisiensi...');
+      const r = await callServer('getApprovedDuplicatesReport', filterVal);
+      const data = r.data || {};
+      const summary = data.summary || {};
+      const items = data.items || [];
+
+      // Simpan di state untuk export excel
+      state.reportData = {
+        summary,
+        items,
+        generatedBy: fullName,
+        generatedAt: new Date().toLocaleString('id-ID'),
+        role: role,
+        filter: filterVal
+      };
+
+      // Update KPI Cards
+      if ($('reportTotalApproved')) $('reportTotalApproved').textContent = fmt(summary.totalApproved || 0);
+      if ($('reportTotalSavings')) $('reportTotalSavings').textContent = money(summary.totalPotentialSavings || 0);
+      if ($('reportTotalStockValue')) $('reportTotalStockValue').textContent = money(summary.totalStockValue || 0);
+      if ($('reportAvgScore')) $('reportAvgScore').textContent = (summary.avgDuplicateScore || 0) + '%';
+      if ($('reportRowCountText')) $('reportRowCountText').textContent = `${items.length} item material duplikat`;
+
+      // Render Tabel
+      renderReportTable(items);
+    } catch (e) {
+      toast('Gagal memuat laporan: ' + e.message, 'error');
+    } finally {
+      showLoading(false);
+    }
+  }
+
+  function renderReportTable(items) {
+    const tbody = $('reportTableBody');
+    if (!tbody) return;
+
+    if (!items || !items.length) {
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="7" class="text-center text-muted p-5">
+            <i class="bi bi-inbox d-block mb-2" style="font-size: 2rem;"></i>
+            Belum ada data material dengan status <strong>Approved Duplicate</strong>.<br>
+            Buka menu <a href="javascript:void(0)" onclick="window.navigateToSection('duplicates')" class="text-accent fw-bold">Duplicate Review</a> untuk mereview dan menyetujui kandidat duplikat.
+          </td>
+        </tr>`;
+      return;
+    }
+
+    tbody.innerHTML = items.map((x, idx) => {
+      const sc = Number(x.duplicate_score) || 0;
+      const scoreBadgeClass = sc >= 95 ? 'score-high' : sc >= 85 ? 'score-mid' : 'score-low';
+      const statusBadge = x.review_status === 'MERGE_AND_OBSOLETE' ? 'bg-primary' : 'bg-success';
+      const statusText = x.review_status === 'MERGE_AND_OBSOLETE' ? 'Merged &amp; Obsolete' : 'Approved Duplicate';
+      const reviewer = x.assigned_reviewer || 'admin';
+      const reviewDate = x.reviewed_at ? new Date(x.reviewed_at).toLocaleDateString('id-ID') : '-';
+
+      return `
+        <tr>
+          <td class="text-center">${idx + 1}</td>
+          <td>
+            <strong>${escapeHtml(x.candidate_id)}</strong>
+            <small class="badge bg-secondary d-block mt-1 text-truncate" style="max-width:110px;">${escapeHtml(x.cluster_id || '-')}</small>
+          </td>
+          <td>
+            <strong>${escapeHtml(x.code_a)}</strong>
+            <small class="text-muted d-block text-truncate" style="max-width:180px;">${escapeHtml(x.desc_a || '-')}</small>
+            <div class="small text-muted mt-1">
+              <span>Mfr: <strong>${escapeHtml(x.mfr_a || '-')}</strong></span> |
+              <span>PN: <strong>${escapeHtml(x.pn_a || '-')}</strong></span>
+            </div>
+            <small class="text-muted">Stok: ${fmt(x.qty_a)} (${money(x.val_a)})</small>
+          </td>
+          <td>
+            <strong>${escapeHtml(x.code_b)}</strong>
+            <small class="text-muted d-block text-truncate" style="max-width:180px;">${escapeHtml(x.desc_b || '-')}</small>
+            <div class="small text-muted mt-1">
+              <span>Mfr: <strong>${escapeHtml(x.mfr_b || '-')}</strong></span> |
+              <span>PN: <strong>${escapeHtml(x.pn_b || '-')}</strong></span>
+            </div>
+            <small class="text-muted">Stok: ${fmt(x.qty_b)} (${money(x.val_b)})</small>
+          </td>
+          <td>
+            <span class="badge-score ${scoreBadgeClass}">${sc.toFixed(1)}%</span>
+            <small class="text-muted d-block text-truncate mt-1" style="max-width:140px;" title="${escapeHtml(x.ai_explanation || '')}">${escapeHtml(x.ai_explanation || '-')}</small>
+          </td>
+          <td>
+            <strong class="text-success">${money(x.potential_saving || 0)}</strong>
+          </td>
+          <td>
+            <span class="badge ${statusBadge}">${statusText}</span>
+            <small class="d-block text-muted mt-1">By: <strong>${escapeHtml(reviewer)}</strong></small>
+            <small class="text-muted">${reviewDate}</small>
+            ${x.review_notes ? `<small class="text-muted d-block fst-italic">"${escapeHtml(x.review_notes)}"</small>` : ''}
+          </td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  function exportReportExcel() {
+    if (!state.reportData || !state.reportData.items || !state.reportData.items.length) {
+      toast('Tidak ada data laporan untuk diexport.', 'warning');
+      return;
+    }
+
+    if (typeof XLSX === 'undefined') {
+      toast('Pustaka XLSX tidak tersedia.', 'error');
+      return;
+    }
+
+    const { summary, items, generatedBy, generatedAt, role, filter } = state.reportData;
+
+    // Header Metadata
+    const wsData = [
+      ['LAPORAN EFISIENSI & RASIONALISASI MATERIAL DUPLIKAT (APPROVED DUPLICATES)'],
+      ['Sistem Kecerdasan Material Master Cleansing & Inventory Rationalization'],
+      [],
+      ['Disiapkan Oleh (Report By):', generatedBy, 'Role:', role],
+      ['Tanggal Laporan:', generatedAt, 'Filter Status:', filter],
+      ['Total Pasangan Approved:', summary.totalApproved || items.length, 'Total Potensi Efisiensi:', summary.totalPotentialSavings || 0],
+      ['Total Nilai Stok Terekspos:', summary.totalStockValue || 0, 'Rata-rata Skor Duplikasi:', (summary.avgDuplicateScore || 0) + '%'],
+      [],
+      [
+        'No',
+        'Candidate ID',
+        'Cluster ID',
+        'Material Code A',
+        'Deskripsi Material A',
+        'Manufacturer A',
+        'Part Number A',
+        'Qty Stok A',
+        'Nilai Stok A (IDR)',
+        'Material Code B',
+        'Deskripsi Material B',
+        'Manufacturer B',
+        'Part Number B',
+        'Qty Stok B',
+        'Nilai Stok B (IDR)',
+        'Skor Duplikasi (%)',
+        'Tingkat Confidence',
+        'Potensi Efisiensi Biaya (IDR)',
+        'Status Review',
+        'Reviewer (Reported By)',
+        'Tanggal Review',
+        'Catatan Review',
+        'AI Explainability'
+      ]
+    ];
+
+    // Data baris
+    items.forEach((x, i) => {
+      wsData.push([
+        i + 1,
+        x.candidate_id || '',
+        x.cluster_id || '',
+        x.code_a || '',
+        x.desc_a || '',
+        x.mfr_a || '',
+        x.pn_a || '',
+        Number(x.qty_a) || 0,
+        Number(x.val_a) || 0,
+        x.code_b || '',
+        x.desc_b || '',
+        x.mfr_b || '',
+        x.pn_b || '',
+        Number(x.qty_b) || 0,
+        Number(x.val_b) || 0,
+        Number(x.duplicate_score) || 0,
+        x.confidence_level || '',
+        Number(x.potential_saving) || 0,
+        x.review_status || '',
+        x.assigned_reviewer || generatedBy,
+        x.reviewed_at ? new Date(x.reviewed_at).toLocaleDateString('id-ID') : '',
+        x.review_notes || '',
+        x.ai_explanation || ''
+      ]);
+    });
+
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+    // Set lebar kolom
+    ws['!cols'] = [
+      { wch: 6 },   // No
+      { wch: 18 },  // Candidate ID
+      { wch: 14 },  // Cluster ID
+      { wch: 16 },  // Code A
+      { wch: 40 },  // Desc A
+      { wch: 16 },  // Mfr A
+      { wch: 18 },  // PN A
+      { wch: 12 },  // Qty A
+      { wch: 18 },  // Val A
+      { wch: 16 },  // Code B
+      { wch: 40 },  // Desc B
+      { wch: 16 },  // Mfr B
+      { wch: 18 },  // PN B
+      { wch: 12 },  // Qty B
+      { wch: 18 },  // Val B
+      { wch: 16 },  // Score
+      { wch: 16 },  // Confidence
+      { wch: 24 },  // Potensi Efisiensi
+      { wch: 20 },  // Status
+      { wch: 24 },  // Reviewer
+      { wch: 16 },  // Tanggal
+      { wch: 30 },  // Catatan
+      { wch: 50 }   // Explainability
+    ];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Laporan_Efisiensi');
+
+    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const fileName = `Laporan_Approved_Duplicates_Efisiensi_${dateStr}.xlsx`;
+    XLSX.writeFile(wb, fileName);
+    toast(`Laporan Excel berhasil diunduh: ${fileName}`, 'success');
   }
 
   function score(v) {

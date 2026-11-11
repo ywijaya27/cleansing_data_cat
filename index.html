@@ -27,6 +27,7 @@
       <button type="button" class="nav-item" data-section="materials"><i class="bi bi-boxes"></i><span>Material Master</span></button>
       <button type="button" class="nav-item" data-section="duplicates" id="nav-duplicates"><i class="bi bi-intersect"></i><span>Duplicate Review</span></button>
       <button type="button" class="nav-item" data-section="similarity" id="nav-similarity"><i class="bi bi-diagram-3"></i><span>Similarity</span></button>
+      <button type="button" class="nav-item" data-section="reports" id="nav-reports"><i class="bi bi-file-earmark-bar-graph"></i><span>Laporan Efisiensi</span></button>
       <button type="button" class="nav-item" data-section="users" id="nav-users"><i class="bi bi-people"></i><span>User &amp; Hak Akses</span></button>
       <button type="button" class="nav-item" data-section="settings" id="nav-settings"><i class="bi bi-gear"></i><span>Pengaturan</span></button>
     </nav>
@@ -168,7 +169,10 @@
           <h2>Duplicate Review & Cluster Engine</h2>
           <p>Kandidat duplikasi multi-kriteria berbasis AI, pengelompokan cluster, dan rekomendasi Golden Master.</p>
         </div>
-        <div class="d-flex gap-2">
+        <div class="d-flex gap-2 flex-wrap">
+          <button id="openReportSectionBtn" type="button" class="btn btn-outline-accent">
+            <i class="bi bi-file-earmark-bar-graph me-1"></i>Laporan Approved &amp; Efisiensi
+          </button>
           <button id="runAiAnalysisBtn" type="button" class="btn btn-accent">
             <i class="bi bi-cpu-fill"></i> Jalankan Analisis AI
           </button>
@@ -265,6 +269,163 @@
             </thead>
             <tbody id="similarityBody"></tbody>
           </table>
+        </div>
+      </article>
+    </section>
+
+    <!-- LAPORAN EFISIENSI & APPROVED DUPLICATES -->
+    <section id="section-reports" class="content-section">
+      <div class="section-head d-print-none">
+        <div>
+          <h2>Laporan Efisiensi Material Duplikat (Approved Duplicate)</h2>
+          <p>Laporan komprehensif rasionalisasi SKU, potensi penghematan biaya inventori, dan audit review duplikat.</p>
+        </div>
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <select id="reportStatusFilter" class="form-control-custom" style="width: auto;">
+            <option value="APPROVED_DUPLICATE" selected>Status: Approved Duplicate</option>
+            <option value="MERGE_AND_OBSOLETE">Status: Merge &amp; Obsolete</option>
+            <option value="ALL_APPROVED">Semua Disetujui (Approved + Merged)</option>
+          </select>
+          <button id="exportReportExcelBtn" type="button" class="btn btn-sm btn-outline-accent">
+            <i class="bi bi-file-earmark-excel me-1"></i>Export Excel (.xlsx)
+          </button>
+          <button id="printReportBtn" type="button" class="btn btn-sm btn-accent">
+            <i class="bi bi-printer me-1"></i>Cetak / Simpan PDF
+          </button>
+        </div>
+      </div>
+
+      <!-- KOP & METADATA LAPORAN (TAMPIL DI LAYAR & SAAT CETAK) -->
+      <article class="panel mb-4 report-header-card">
+        <div class="d-flex justify-content-between align-items-start border-bottom pb-3 mb-3 flex-wrap gap-2">
+          <div>
+            <div class="d-flex align-items-center gap-2 mb-1">
+              <span class="brand-icon" style="width:32px; height:32px; font-size:16px;"><i class="bi bi-shield-check"></i></span>
+              <h3 class="h5 mb-0 fw-bold">LAPORAN EFISIENSI &amp; RASIONALISASI MATERIAL DUPLIKAT</h3>
+            </div>
+            <p class="text-muted small mb-0">Sistem Kecerdasan Material Master Cleansing &amp; Inventory Optimization</p>
+          </div>
+          <div class="text-end">
+            <span class="badge bg-success text-white px-3 py-2 fw-bold" id="reportFilterBadge">
+              <i class="bi bi-check-circle-fill me-1"></i>STATUS: APPROVED DUPLICATE
+            </span>
+          </div>
+        </div>
+
+        <div class="row g-3 report-meta-grid">
+          <div class="col-md-3 col-6">
+            <small class="text-muted d-block">Disiapkan Oleh (Report By):</small>
+            <strong class="text-accent" id="reportByUserName">Administrator Sistem</strong>
+            <small class="d-block text-muted" id="reportByUserRole">(Role: ADMIN)</small>
+          </div>
+          <div class="col-md-3 col-6">
+            <small class="text-muted d-block">ID Akun Login:</small>
+            <span class="badge bg-light text-dark border" id="reportByUserAccount">admin</span>
+          </div>
+          <div class="col-md-3 col-6">
+            <small class="text-muted d-block">Waktu &amp; Tanggal Pembuatan:</small>
+            <span class="small fw-semibold" id="reportGeneratedDate">-</span>
+          </div>
+          <div class="col-md-3 col-6">
+            <small class="text-muted d-block">Basis Evaluasi:</small>
+            <span class="small text-muted">Part Number, Merk, Deskripsi &amp; AI Explainability</span>
+          </div>
+        </div>
+      </article>
+
+      <!-- KPI METRIK EFISIENSI -->
+      <div class="kpi-grid mb-4">
+        <article class="kpi-card p-3">
+          <div class="d-flex justify-content-between align-items-center">
+            <div>
+              <span class="kpi-label">Pasangan Approved</span>
+              <div id="reportTotalApproved" class="kpi-value text-accent">0</div>
+              <small class="text-muted">Kandidat duplikat disetujui</small>
+            </div>
+            <div class="kpi-icon"><i class="bi bi-check-all"></i></div>
+          </div>
+        </article>
+
+        <article class="kpi-card p-3">
+          <div class="d-flex justify-content-between align-items-center">
+            <div>
+              <span class="kpi-label">Total Potensi Efisiensi</span>
+              <div id="reportTotalSavings" class="kpi-value text-success">Rp 0</div>
+              <small class="text-muted">Cost avoidance dari rasionalisasi</small>
+            </div>
+            <div class="kpi-icon"><i class="bi bi-cash-stack"></i></div>
+          </div>
+        </article>
+
+        <article class="kpi-card p-3">
+          <div class="d-flex justify-content-between align-items-center">
+            <div>
+              <span class="kpi-label">Nilai Stok Terekspos</span>
+              <div id="reportTotalStockValue" class="kpi-value">Rp 0</div>
+              <small class="text-muted">Total nilai stok A + B</small>
+            </div>
+            <div class="kpi-icon"><i class="bi bi-boxes"></i></div>
+          </div>
+        </article>
+
+        <article class="kpi-card p-3">
+          <div class="d-flex justify-content-between align-items-center">
+            <div>
+              <span class="kpi-label">Rata-rata Skor Duplikat</span>
+              <div id="reportAvgScore" class="kpi-value">0%</div>
+              <small class="text-muted">Tingkat keyakinan kesamaan</small>
+            </div>
+            <div class="kpi-icon"><i class="bi bi-percent"></i></div>
+          </div>
+        </article>
+      </div>
+
+      <!-- TABEL RINCIAN LAPORAN -->
+      <article class="panel">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h3 class="h6 mb-0"><i class="bi bi-table me-2 text-accent"></i>Rincian Item Approved Duplicate &amp; Potensi Efisiensi</h3>
+          <span class="text-muted small" id="reportRowCountText">0 data item</span>
+        </div>
+        <div class="table-responsive">
+          <table class="data-table" id="reportTable">
+            <thead>
+              <tr>
+                <th style="width: 40px;">No</th>
+                <th>Kandidat &amp; Cluster</th>
+                <th>Material A (Candidate A)</th>
+                <th>Material B (Candidate B)</th>
+                <th>Skor AI</th>
+                <th>Potensi Efisiensi (Rp)</th>
+                <th>Keputusan &amp; Reviewer</th>
+              </tr>
+            </thead>
+            <tbody id="reportTableBody">
+              <tr>
+                <td colspan="7" class="text-center text-muted p-4">Memuat data laporan efisiensi...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- TANDA TANGAN CETAK (HANYA MUNCUL DI PRINT/PDF) -->
+        <div class="print-signature-section mt-5 pt-4 border-top d-none d-print-block">
+          <div class="row text-center">
+            <div class="col-4">
+              <p class="small text-muted mb-5">Disiapkan Oleh (Report By):</p>
+              <strong class="d-block" id="printSignName">-</strong>
+              <small class="text-muted" id="printSignRole">Reviewer / Analyst</small>
+            </div>
+            <div class="col-4">
+              <p class="small text-muted mb-5">Diverifikasi Oleh:</p>
+              <strong class="d-block">________________________</strong>
+              <small class="text-muted">Lead Master Data Governance</small>
+            </div>
+            <div class="col-4">
+              <p class="small text-muted mb-5">Disetujui Oleh:</p>
+              <strong class="d-block">________________________</strong>
+              <small class="text-muted">Inventory &amp; Supply Chain Head</small>
+            </div>
+          </div>
         </div>
       </article>
     </section>

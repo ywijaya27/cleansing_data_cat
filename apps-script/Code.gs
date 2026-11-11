@@ -492,7 +492,7 @@ function getSimilarMaterials(limit) {
 /**
  * SIMPAN KEPUTUSAN REVIEW DUPLIKAT (MERGE / REJECT / APPROVE)
  */
-function saveDuplicateDecision(candidateId, decision, masterCode, notes) {
+function saveDuplicateDecision(candidateId, decision, masterCode, notes, reviewerName) {
   const lock = LockService.getScriptLock();
   try {
     lock.waitLock(10000);
@@ -500,12 +500,15 @@ function saveDuplicateDecision(candidateId, decision, masterCode, notes) {
     const allowed = ['MERGE_AND_OBSOLETE', 'APPROVED_DUPLICATE', 'REJECTED_DIFFERENT', 'CLOSED'];
     if (allowed.indexOf(decision) === -1) throw new Error('Keputusan review tidak valid.');
 
-    const email = Session.getActiveUser().getEmail() || 'GAS User';
+    const email = reviewerName || Session.getActiveUser().getEmail() || 'admin';
     
     // Update status di tabel duplicate_analysis
     supabaseRequest_('duplicate_analysis?candidate_id=eq.' + encodeURIComponent(candidateId), 'patch', {
       review_status: decision,
-      recommended_master_code: masterCode || null
+      recommended_master_code: masterCode || null,
+      assigned_reviewer: email,
+      review_notes: notes || null,
+      reviewed_at: new Date().toISOString()
     });
 
     // Simpan keputusan ke tabel review_decision
@@ -522,6 +525,48 @@ function saveDuplicateDecision(candidateId, decision, masterCode, notes) {
     return response_(false, null, error.message);
   } finally {
     try { lock.releaseLock(); } catch (_) {}
+  }
+}
+
+/**
+ * MENGAMBIL LAPORAN EFISIENSI & APPROVED DUPLICATES
+ */
+function getApprovedDuplicatesReport(statusFilter) {
+  try {
+    let query = 'duplicate_analysis?order=potential_saving.desc,duplicate_score.desc&limit=500';
+    if (statusFilter === 'ALL_APPROVED') {
+      query += '&review_status=in.(APPROVED_DUPLICATE,MERGE_AND_OBSOLETE)';
+    } else if (statusFilter) {
+      query += '&review_status=eq.' + encodeURIComponent(statusFilter);
+    } else {
+      query += '&review_status=eq.APPROVED_DUPLICATE';
+    }
+
+    const rows = supabaseRequest_(query, 'get') || [];
+    let totalSavings = 0;
+    let totalStockVal = 0;
+    let scoreSum = 0;
+    const clusters = new Set();
+
+    rows.forEach(r => {
+      totalSavings += Number(r.potential_saving) || 0;
+      totalStockVal += (Number(r.val_a) || 0) + (Number(r.val_b) || 0);
+      scoreSum += Number(r.duplicate_score) || 0;
+      if (r.cluster_id) clusters.add(r.cluster_id);
+    });
+
+    return response_(true, {
+      summary: {
+        totalApproved: rows.length,
+        totalPotentialSavings: totalSavings,
+        totalStockValue: totalStockVal,
+        avgDuplicateScore: rows.length ? parseFloat((scoreSum / rows.length).toFixed(1)) : 0,
+        clustersCount: clusters.size
+      },
+      items: rows
+    }, 'Laporan efisiensi approved duplicate berhasil dimuat.');
+  } catch (e) {
+    return response_(false, null, e.message);
   }
 }
 

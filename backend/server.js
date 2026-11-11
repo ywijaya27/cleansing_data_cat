@@ -386,7 +386,7 @@ app.get('/api/duplicates', async (req, res) => {
 
 app.post('/api/duplicates/decision', async (req, res) => {
   try {
-    const { candidateId, decision, selectedMaster, notes } = req.body;
+    const { candidateId, decision, selectedMaster, notes, reviewerName } = req.body;
     if (!candidateId) return apiResponse(res, 400, false, null, 'Candidate ID wajib diisi.');
 
     // 1. Update duplicate_analysis
@@ -394,7 +394,7 @@ app.post('/api/duplicates/decision', async (req, res) => {
       method: 'PATCH',
       body: {
         review_status: decision,
-        assigned_reviewer: 'admin',
+        assigned_reviewer: reviewerName || 'admin',
         review_notes: notes || null,
         reviewed_at: new Date().toISOString()
       }
@@ -409,6 +409,53 @@ app.post('/api/duplicates/decision', async (req, res) => {
     }
 
     return apiResponse(res, 200, true, null, 'Keputusan review berhasil disimpan.');
+  } catch (error) {
+    return apiResponse(res, 500, false, null, error.message);
+  }
+});
+
+// =============================================================================
+// ROUTES: LAPORAN EFISIENSI & APPROVED DUPLICATES
+// =============================================================================
+
+app.get('/api/reports/approved-duplicates', async (req, res) => {
+  try {
+    const status = req.query.status || 'APPROVED_DUPLICATE';
+    let query = 'duplicate_analysis?order=potential_saving.desc,duplicate_score.desc&limit=500';
+
+    if (status === 'ALL_APPROVED') {
+      query += '&review_status=in.(APPROVED_DUPLICATE,MERGE_AND_OBSOLETE)';
+    } else if (status) {
+      query += `&review_status=eq.${encodeURIComponent(status)}`;
+    }
+
+    const rows = await supabaseFetch(query) || [];
+
+    // Hitung ringkasan efisiensi
+    let totalSavings = 0;
+    let totalStockVal = 0;
+    let scoreSum = 0;
+    const clusters = new Set();
+
+    rows.forEach(r => {
+      totalSavings += Number(r.potential_saving) || 0;
+      totalStockVal += (Number(r.val_a) || 0) + (Number(r.val_b) || 0);
+      scoreSum += Number(r.duplicate_score) || 0;
+      if (r.cluster_id) clusters.add(r.cluster_id);
+    });
+
+    const summary = {
+      totalApproved: rows.length,
+      totalPotentialSavings: totalSavings,
+      totalStockValue: totalStockVal,
+      avgDuplicateScore: rows.length ? parseFloat((scoreSum / rows.length).toFixed(1)) : 0,
+      clustersCount: clusters.size
+    };
+
+    return apiResponse(res, 200, true, {
+      summary,
+      items: rows
+    }, 'Laporan efisiensi approved duplicate berhasil dimuat.');
   } catch (error) {
     return apiResponse(res, 500, false, null, error.message);
   }

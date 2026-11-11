@@ -100,11 +100,16 @@
       }
 
       case 'saveDuplicateDecision': {
-        const [candidateId, decision, selectedMaster, notes] = args;
+        const [candidateId, decision, selectedMaster, notes, reviewerName] = args;
         return await http('/duplicates/decision', {
           method: 'POST',
-          body: JSON.stringify({ candidateId, decision, selectedMaster, notes })
+          body: JSON.stringify({ candidateId, decision, selectedMaster, notes, reviewerName })
         });
+      }
+
+      case 'getApprovedDuplicatesReport': {
+        const [status = 'APPROVED_DUPLICATE'] = args;
+        return await http(`/reports/approved-duplicates?status=${encodeURIComponent(status)}`);
       }
 
       case 'getSimilarMaterials': {
