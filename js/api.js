@@ -377,9 +377,24 @@
         const [rows = [], fileName = ''] = args;
         if (!rows.length) throw new Error('Data upload kosong.');
 
-        const cleanRows = rows.map((r, i) => {
-          const code = String(r.material_code || r.MATERIAL_CODE || r.Material_Code || `MAT-${100000 + i}`).trim();
-          const desc = String(r.material_description || r.MATERIAL_DESCRIPTION || r.Deskripsi || '').trim();
+        // 1. Ambil seluruh material_code yang sudah ada di Supabase untuk deduplikasi
+        const existingCodesSet = new Set();
+        try {
+          const existingList = await supabaseRequest('material_raw?select=material_code&limit=50000');
+          if (Array.isArray(existingList)) {
+            existingList.forEach(item => {
+              if (item.material_code) existingCodesSet.add(String(item.material_code).trim().toUpperCase());
+            });
+          }
+        } catch (_) {}
+
+        let skippedDuplicates = 0;
+        const validToInsert = [];
+        const seenInFile = new Set();
+
+        rows.forEach((r, i) => {
+          const code = String(r.material_code || r.MATERIAL_CODE || r.Material_Code || '').trim();
+          const desc = String(r.material_description || r.MATERIAL_DESCRIPTION || r.Deskripsi || r.item_text_result || '').trim();
           const mfr = String(r.manufacturer || r.MANUFACTURER || '').trim();
           const pn = String(r.part_number || r.PART_NUMBER || '').trim();
           const grp = String(r.material_group || r.MATERIAL_GROUP || 'GENERAL').trim().toUpperCase();
@@ -387,8 +402,18 @@
           const qty = parseFloat(r.stock_qty || r.STOCK_QTY || 0) || 0;
           const val = parseFloat(r.stock_value || r.STOCK_VALUE || 0) || 0;
 
-          return {
-            material_code: code,
+          const finalCode = code || (pn ? `PN-${pn.replace(/[^a-zA-Z0-9]/g, '')}` : `MAT-${100000 + i + 1}`);
+          const upperCode = finalCode.toUpperCase();
+
+          // Jika kode material sudah ada di database atau duplikat dalam file, lewati (skip)
+          if (existingCodesSet.has(upperCode) || seenInFile.has(upperCode)) {
+            skippedDuplicates++;
+            return;
+          }
+
+          seenInFile.add(upperCode);
+          validToInsert.push({
+            material_code: finalCode,
             material_description: desc,
             manufacturer: mfr,
             part_number: pn,
@@ -396,24 +421,31 @@
             base_uom: uom,
             stock_qty: qty,
             stock_value: val
-          };
+          });
         });
 
+        // 2. Simpan Riwayat Batch Upload
+        let batchId = null;
         try {
-          await supabaseRequest('upload_batch', {
+          const bRes = await supabaseRequest('upload_batch', {
             method: 'POST',
             body: [{
               file_name: fileName || 'Upload_Master_' + new Date().toISOString().slice(0, 10),
-              total_records: cleanRows.length,
+              total_records: rows.length,
               uploaded_by: 'Direct User',
               status: 'COMPLETED'
             }]
           });
+          if (Array.isArray(bRes) && bRes[0]) batchId = bRes[0].id;
         } catch (_) {}
 
+        // 3. Masukkan hanya data baru (chunk 500)
         const CHUNK = 500;
-        for (let i = 0; i < cleanRows.length; i += CHUNK) {
-          const chunk = cleanRows.slice(i, i + CHUNK);
+        for (let i = 0; i < validToInsert.length; i += CHUNK) {
+          const chunk = validToInsert.slice(i, i + CHUNK);
+          if (batchId) {
+            chunk.forEach(c => c.batch_id = batchId);
+          }
           await supabaseRequest('material_raw', {
             method: 'POST',
             prefer: 'return=minimal',
@@ -423,8 +455,13 @@
 
         return {
           success: true,
-          data: { inserted: cleanRows.length, errors: 0, totalInserted: cleanRows.length },
-          message: `Berhasil mengunggah ${cleanRows.length} material.`
+          data: {
+            inserted: validToInsert.length,
+            skipped: skippedDuplicates,
+            errors: 0,
+            totalRows: rows.length
+          },
+          message: `Upload selesai: ${validToInsert.length} data baru ditambahkan, ${skippedDuplicates} data duplikat dilewati.`
         };
       }
 

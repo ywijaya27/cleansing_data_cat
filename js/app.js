@@ -604,9 +604,20 @@
 
     try {
       showLoading(true, 'Membaca spreadsheet & menjalankan Pra-Audit Konsistensi...');
-      state.parsedRows = await parseSpreadsheet(f);
+      const rawRows = await parseSpreadsheet(f);
 
-      if (state.parsedRows.length > 100000) throw new Error('Record melebihi batas 100.000 baris.');
+      if (rawRows.length > 100000) throw new Error('Record melebihi batas 100.000 baris.');
+
+      // Validasi & Auto-generate material_code jika belum ada
+      state.parsedRows = rawRows.map((r, i) => {
+        const item = { ...r };
+        if (!item.material_code && !item.material_number) {
+          // Buat identifier sementara berbasis Part No / Noun / Index
+          const cleanPn = String(item.part_number || '').trim().replace(/[^a-zA-Z0-9]/g, '');
+          item.material_code = cleanPn ? `PN-${cleanPn}` : `MAT-${100000 + i + 1}`;
+        }
+        return item;
+      });
 
       // Jalankan Gatekeeper Consistency Pre-Audit
       runPreUploadGatekeeperAudit(state.parsedRows);
@@ -798,7 +809,20 @@
     try {
       showLoading(true, 'Mengupload ke Supabase...');
       const r = await callServer('uploadMaterials', state.parsedRows, state.selectedFile.name);
-      toast(`Upload selesai: ${fmt(r.data.inserted)} masuk, ${fmt(r.data.errors)} error`, r.data.errors ? 'warning' : 'success');
+      const resData = r.data || {};
+      const inserted = resData.inserted ?? resData.newInserted ?? 0;
+      const skipped = resData.skipped ?? resData.duplicateSkipped ?? 0;
+      const errors = resData.errors ?? 0;
+
+      let msg = `Hasil Upload: ${fmt(inserted)} data baru ditambahkan.`;
+      if (skipped > 0) {
+        msg += ` (${fmt(skipped)} data duplikat dilewati).`;
+      }
+      if (errors > 0) {
+        msg += ` [${fmt(errors)} baris error].`;
+      }
+
+      toast(msg, errors ? 'warning' : 'success');
       $('materialFile').value = '';
       $('uploadBtn').disabled = true;
       if ($('cancelUploadBtn')) $('cancelUploadBtn').classList.add('d-none');
@@ -806,6 +830,9 @@
       state.parsedRows = [];
       loadUploadHistory();
       loadDashboard();
+      if ($('section-materials').classList.contains('active')) {
+        loadMaterials();
+      }
     } catch (e) {
       toast('Upload gagal: ' + e.message, 'error');
     } finally {

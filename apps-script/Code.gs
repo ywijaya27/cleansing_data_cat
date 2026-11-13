@@ -460,22 +460,45 @@ function uploadMaterials(records, fileName) {
 
     const batchId = batch[0].id;
     const valid = [], errors = [], seen = {};
+    let skippedDuplicates = 0;
+
+    // Ambil daftar material_code yang sudah ada di Supabase untuk mencegah duplikasi
+    const existingCodes = {};
+    try {
+      const existing = supabaseRequest_('material_raw?select=material_code&limit=50000', 'get');
+      if (Array.isArray(existing)) {
+        existing.forEach(function(item) {
+          if (item.material_code) existingCodes[String(item.material_code).trim().toUpperCase()] = true;
+        });
+      }
+    } catch (_) {}
 
     records.forEach((r, idx) => {
-      const code = cleanText_(r.material_code);
-      const desc = cleanText_(r.material_description);
-      if (!code) errors.push({ batch_id: batchId, row_number: idx + 2, error_message: 'Material code kosong' });
-      else if (!desc) errors.push({ batch_id: batchId, row_number: idx + 2, error_message: 'Description kosong' });
-      else if (seen[code]) errors.push({ batch_id: batchId, row_number: idx + 2, error_message: 'Duplicate material code dalam file' });
-      else {
-        seen[code] = true;
+      let code = cleanText_(r.material_code);
+      const desc = cleanText_(r.material_description || r.item_text_result);
+      const pn = cleanText_(r.part_number);
+
+      // Auto-generate code jika format file pengguna tidak menyertakan kode eksplisit
+      if (!code) {
+        code = pn ? 'PN-' + pn.replace(/[^a-zA-Z0-9]/g, '') : 'MAT-' + (100000 + idx + 1);
+      }
+
+      const upperCode = code.toUpperCase();
+
+      if (!desc) {
+        errors.push({ batch_id: batchId, row_number: idx + 2, error_message: 'Description kosong' });
+      } else if (seen[upperCode] || existingCodes[upperCode]) {
+        // Lewatkan data duplikat tanpa menghapus atau menimpa data lama
+        skippedDuplicates++;
+      } else {
+        seen[upperCode] = true;
         valid.push({
           material_code: code,
           material_description: desc,
           manufacturer: cleanText_(r.manufacturer),
           part_number: cleanText_(r.part_number),
           material_group: cleanText_(r.material_group),
-          base_uom: cleanText_(r.base_uom),
+          base_uom: cleanText_(r.base_uom) || 'EA',
           stock_qty: numberOrZero_(r.stock_qty),
           stock_value: numberOrZero_(r.stock_value),
           batch_id: batchId
@@ -494,8 +517,8 @@ function uploadMaterials(records, fileName) {
       status: errors.length ? 'COMPLETED_WITH_ERRORS' : 'COMPLETED'
     });
 
-    writeAudit_('UPLOAD', 'CREATE', batchId, 'Upload ' + valid.length + ' material; error ' + errors.length);
-    return response_(true, { batchId: batchId, inserted: valid.length, errors: errors.length }, 'Upload selesai.');
+    writeAudit_('UPLOAD', 'CREATE', batchId, 'Upload ' + valid.length + ' material baru; ' + skippedDuplicates + ' duplikat dilewati; error ' + errors.length);
+    return response_(true, { batchId: batchId, inserted: valid.length, skipped: skippedDuplicates, errors: errors.length }, 'Upload selesai. ' + valid.length + ' data baru ditambahkan, ' + skippedDuplicates + ' duplikat dilewati.');
   } catch (error) {
     return response_(false, null, error.message);
   } finally {
