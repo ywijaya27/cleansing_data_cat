@@ -19,14 +19,15 @@
     },
     accessControl: {
       role: 'GUEST',
-      allowed_menus: ['dashboard', 'materials', 'similarity'],
+      allowed_menus: ['dashboard', 'materials', 'similarity', 'consistency'],
       can_upload: false,
       can_run_ai: false,
       can_merge: false,
       can_manage_settings: false
     },
     allRoles: [],
-    users: []
+    users: [],
+    consistencyData: []
   };
 
   const titles = {
@@ -35,6 +36,7 @@
     materials: 'Material Master',
     duplicates: 'Duplicate Review',
     similarity: 'Similar Material',
+    consistency: 'Cek Konsistensi & Standar Katalog',
     reports: 'Laporan Efisiensi Approved Duplicates',
     users: 'User & Hak Akses (RBAC)',
     settings: 'Pengaturan'
@@ -179,6 +181,7 @@
     if (section === 'materials') loadMaterials();
     if (section === 'duplicates') loadDuplicates();
     if (section === 'similarity') loadSimilarity();
+    if (section === 'consistency') loadConsistencyView();
     if (section === 'reports') loadApprovedReport();
     if (section === 'upload') loadUploadHistory();
     if (section === 'users') loadUserManagement();
@@ -251,6 +254,14 @@
 
     $('menuToggle').addEventListener('click', () => $('sidebar').classList.toggle('open'));
     $('themeToggle').addEventListener('click', toggleTheme);
+
+    // Consistency Audit Actions
+    if ($('runConsistencyAuditBtn')) $('runConsistencyAuditBtn').addEventListener('click', runConsistencyAudit);
+    if ($('exportConsistencyBtn')) $('exportConsistencyBtn').addEventListener('click', exportConsistencyExcel);
+    if ($('consistencyStatusFilter')) $('consistencyStatusFilter').addEventListener('change', renderConsistencyTable);
+    if ($('consistencyTemplateFilter')) $('consistencyTemplateFilter').addEventListener('change', renderConsistencyTable);
+    if ($('consistencySearchInput')) $('consistencySearchInput').addEventListener('input', debounce(renderConsistencyTable, 300));
+    if ($('abvSearchInput')) $('abvSearchInput').addEventListener('input', debounce(renderAbbreviationModalTable, 250));
 
     // Upload
     $('materialFile').addEventListener('change', handleFile);
@@ -632,12 +643,24 @@
         material_number: 'material_code',
         kode_material: 'material_code',
         description: 'material_description',
+        item_text_result: 'material_description',
+        item_text: 'material_description',
         material_desc: 'material_description',
         deskripsi: 'material_description',
         brand: 'manufacturer',
+        manufacture: 'manufacturer',
         mfr: 'manufacturer',
         pabrikan: 'manufacturer',
         part_no: 'part_number',
+        nomor_part: 'part_number',
+        major_name: 'noun',
+        major_name_noun: 'noun',
+        noun: 'noun',
+        modifier_1: 'modifier1',
+        modifier_2: 'modifier2',
+        modifier_3: 'modifier3',
+        template: 'template_code',
+        template_code: 'template_code',
         nomor_part: 'part_number',
         material_group_desc: 'material_group',
         grup: 'material_group',
@@ -1574,6 +1597,263 @@
     } finally {
       showLoading(false);
     }
+  }
+
+  // =============================================================================
+  // MODUL CEK KONSISTENSI & STANDAR KATALOG (TEL SCS, NATO ACodP-1, MESC)
+  // =============================================================================
+
+  function loadConsistencyView() {
+    renderAbbreviationModalTable();
+    if (!state.consistencyData || !state.consistencyData.length) {
+      // Jika belum diaudit, jalankan otomatis audit pertama kali
+      runConsistencyAudit();
+    } else {
+      renderConsistencyTable();
+    }
+  }
+
+  async function runConsistencyAudit() {
+    if (!window.ConsistencyEngine) {
+      toast('ConsistencyEngine belum dimuat.', 'error');
+      return;
+    }
+
+    try {
+      showLoading(true, 'Mengambil data katalog & menjalankan audit konsistensi...');
+      
+      // Ambil data material aktif dari server (limit 500 untuk evaluasi komprehensif)
+      const r = await callServer('getMaterials', 1, 500, '');
+      const rawRows = (r.data && r.data.rows) || [];
+
+      if (!rawRows.length) {
+        toast('Tidak ada data material di database untuk diaudit.', 'warning');
+        return;
+      }
+
+      // Format row agar field sesuai standar engine (noun, modifiers, template, etc.)
+      const normalizedRows = rawRows.map(row => {
+        const desc = (row.material_description || row.item_text_result || '').trim();
+        // Coba ekstrak noun dari kata pertama sebelum koma jika belum ada
+        const firstSegment = desc.split(',')[0] || '';
+        return {
+          id: row.id || row.material_code,
+          material_code: row.material_code,
+          item_text_result: desc,
+          template_code: row.template_code || (desc.startsWith('SERVICE:') ? 'SVC-01' : 'GEN-01'),
+          major_name: row.noun || row.major_name || firstSegment,
+          modifier1: row.modifier1 || '',
+          modifier2: row.modifier2 || '',
+          modifier3: row.modifier3 || '',
+          manufacture: row.manufacturer || row.manufacture || '',
+          part_no: row.part_number || row.part_no || '',
+          model_no: row.model_no || '',
+          dwg_no: row.dwg_no || '',
+          pos_no: row.pos_no || '',
+          size: row.size || '',
+          material: row.material || '',
+          class: row.class || ''
+        };
+      });
+
+      const auditResult = window.ConsistencyEngine.auditCatalogDataset(normalizedRows);
+      state.consistencySummary = auditResult.summary;
+      state.consistencyData = auditResult.results;
+
+      // Update KPI Cards
+      if ($('kpiConsistencyScore')) $('kpiConsistencyScore').textContent = `${auditResult.summary.avg_score}%`;
+      if ($('kpiCompliantCount')) $('kpiCompliantCount').textContent = fmt(auditResult.summary.compliant_count);
+      if ($('kpiWarningCount')) $('kpiWarningCount').textContent = fmt(auditResult.summary.warning_count);
+      if ($('kpiNonCompliantCount')) $('kpiNonCompliantCount').textContent = fmt(auditResult.summary.non_compliant_count);
+      if ($('kpiTypoCount')) $('kpiTypoCount').textContent = fmt(auditResult.summary.typo_count);
+
+      renderConsistencyTable();
+      toast(`Audit konsistensi selesai. Tingkat kepatuhan: ${auditResult.summary.compliance_rate}%`, 'success');
+    } catch (e) {
+      toast('Gagal menjalankan audit: ' + e.message, 'error');
+    } finally {
+      showLoading(false);
+    }
+  }
+
+  function renderConsistencyTable() {
+    const tbody = $('consistencyTableBody');
+    if (!tbody) return;
+
+    const statusFilter = $('consistencyStatusFilter')?.value || 'ALL';
+    const tempFilter = $('consistencyTemplateFilter')?.value || 'ALL';
+    const search = ($('consistencySearchInput')?.value || '').trim().toLowerCase();
+
+    let list = state.consistencyData || [];
+
+    if (statusFilter !== 'ALL') {
+      list = list.filter(x => x.status === statusFilter);
+    }
+    if (tempFilter !== 'ALL') {
+      list = list.filter(x => (x.template_code || '').startsWith(tempFilter));
+    }
+    if (search) {
+      list = list.filter(x => {
+        const text = (x.item_text || '').toLowerCase();
+        const code = String(x.material_id || '').toLowerCase();
+        const temp = (x.template_code || '').toLowerCase();
+        return text.includes(search) || code.includes(search) || temp.includes(search);
+      });
+    }
+
+    if ($('consistencyRowCountText')) {
+      $('consistencyRowCountText').textContent = `${list.length} data item ditampilkan (dari total ${state.consistencyData.length})`;
+    }
+
+    if (!list.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted p-4">Tidak ada data material yang sesuai filter.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = list.map((item, idx) => {
+      const statusBadge = item.status === 'COMPLIANT' ? 'bg-success' :
+                          item.status === 'WARNING' ? 'bg-warning text-dark' : 'bg-danger';
+
+      const scoreClass = item.score >= 90 ? 'score-high' : item.score >= 60 ? 'score-mid' : 'score-low';
+
+      // Format issues list
+      const issuesHtml = item.issues.length ? item.issues.map(iss => {
+        const icon = iss.severity === 'critical' ? 'bi-x-circle-fill text-danger' :
+                     iss.severity === 'warning' ? 'bi-exclamation-triangle-fill text-warning' : 'bi-info-circle-fill text-info';
+        return `
+          <div class="mb-1 small">
+            <i class="bi ${icon} me-1"></i>
+            <span class="fw-semibold">${escapeHtml(iss.type)}:</span> ${escapeHtml(iss.message)}
+          </div>
+        `;
+      }).join('') : '<span class="text-success small"><i class="bi bi-check-circle-fill me-1"></i>Format & atribut konsisten sesuai standar.</span>';
+
+      return `
+        <tr>
+          <td>${idx + 1}</td>
+          <td>
+            <span class="badge bg-secondary">${escapeHtml(item.template_code || 'GEN')}</span>
+          </td>
+          <td>
+            <strong>${escapeHtml(item.material_id)}</strong>
+            <div class="small text-muted mt-1 font-monospace" style="word-break: break-all;">${escapeHtml(item.item_text)}</div>
+          </td>
+          <td>
+            <span class="badge-score ${scoreClass}">${item.score}%</span>
+          </td>
+          <td>
+            <span class="badge ${statusBadge}">${item.status}</span>
+          </td>
+          <td>
+            <div style="max-height: 120px; overflow-y: auto;">
+              ${issuesHtml}
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  function renderAbbreviationModalTable() {
+    const tbody = $('abvMasterTableBody');
+    if (!tbody) return;
+
+    const search = ($('abvSearchInput')?.value || '').trim().toLowerCase();
+    const allAbv = window.CATALOG_RULES?.ABBREVIATIONS || [];
+
+    const filtered = allAbv.filter(x => {
+      if (!search) return true;
+      return (x.abv || '').toLowerCase().includes(search) || (x.full || '').toLowerCase().includes(search);
+    });
+
+    if ($('abvCountLabel')) $('abvCountLabel').textContent = fmt(filtered.length);
+
+    if (!filtered.length) {
+      tbody.innerHTML = '<tr><td colspan="2" class="text-center text-muted p-3">Singkatan tidak ditemukan.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = filtered.slice(0, 300).map(x => `
+      <tr>
+        <td><strong><code>${escapeHtml(x.abv)}</code></strong></td>
+        <td>${escapeHtml(x.full)}</td>
+      </tr>
+    `).join('');
+  }
+
+  function exportConsistencyExcel() {
+    if (!state.consistencyData || !state.consistencyData.length) {
+      toast('Jalankan audit terlebih dahulu sebelum mengunduh hasil.', 'warning');
+      return;
+    }
+
+    if (typeof XLSX === 'undefined') {
+      toast('Pustaka XLSX tidak tersedia.', 'error');
+      return;
+    }
+
+    const wsData = [
+      ['LAPORAN AUDIT KONSISTENSI & STANDARISASI KATALOG MATERIAL (TEL SCS / NATO / MESC)'],
+      ['Sistem AI Material Master Cleansing, Duplicate Review & Consistency Validator'],
+      [],
+      ['Tanggal Audit:', new Date().toLocaleString('id-ID')],
+      ['Total Item Diaudit:', state.consistencySummary?.total_items || state.consistencyData.length],
+      ['Skor Rata-Rata Kepatuhan:', `${state.consistencySummary?.avg_score || 0}%`],
+      ['Total Compliant:', state.consistencySummary?.compliant_count || 0],
+      ['Total Warning:', state.consistencySummary?.warning_count || 0],
+      ['Total Non-Compliant:', state.consistencySummary?.non_compliant_count || 0],
+      ['Total Typo Terdeteksi:', state.consistencySummary?.typo_count || 0],
+      [],
+      [
+        'No',
+        'Material ID / Code',
+        'Template Code',
+        'Deskripsi Material (item text result)',
+        'Skor Kepatuhan (%)',
+        'Status Standar',
+        'Jumlah Pelanggaran',
+        'Detail Temuan / Masalah',
+        'Rekomendasi Perbaikan Standar'
+      ]
+    ];
+
+    state.consistencyData.forEach((item, idx) => {
+      const issueDetails = item.issues.map(i => `[${i.type}] ${i.message}`).join(' | ');
+      const suggestionDetails = item.suggestions.map(s => `${s.field}: -> ${s.suggested}`).join(' | ');
+
+      wsData.push([
+        idx + 1,
+        item.material_id || '',
+        item.template_code || '',
+        item.item_text || '',
+        item.score || 0,
+        item.status || '',
+        item.issues.length,
+        issueDetails || 'Tidak ada masalah',
+        suggestionDetails || 'Sesuai standar'
+      ]);
+    });
+
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    ws['!cols'] = [
+      { wch: 6 },
+      { wch: 18 },
+      { wch: 14 },
+      { wch: 50 },
+      { wch: 18 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 55 },
+      { wch: 45 }
+    ];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Audit_Konsistensi');
+
+    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const fileName = `Audit_Konsistensi_Katalog_Material_${dateStr}.xlsx`;
+    XLSX.writeFile(wb, fileName);
+    toast(`Laporan Excel berhasil diunduh: ${fileName}`, 'success');
   }
 
   function debounce(fn, wait) {
