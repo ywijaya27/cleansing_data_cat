@@ -266,6 +266,7 @@
     // Upload
     $('materialFile').addEventListener('change', handleFile);
     $('uploadBtn').addEventListener('click', uploadFile);
+    if ($('cancelUploadBtn')) $('cancelUploadBtn').addEventListener('click', cancelUploadFile);
     $('downloadTemplate').addEventListener('click', downloadTemplate);
 
     // Material Master
@@ -602,17 +603,131 @@
     $('fileInfo').textContent = `${f.name} • ${(f.size / 1024 / 1024).toFixed(2)} MB`;
 
     try {
-      showLoading(true, 'Membaca spreadsheet...');
+      showLoading(true, 'Membaca spreadsheet & menjalankan Pra-Audit Konsistensi...');
       state.parsedRows = await parseSpreadsheet(f);
-      showLoading(false);
 
       if (state.parsedRows.length > 100000) throw new Error('Record melebihi batas 100.000 baris.');
+
+      // Jalankan Gatekeeper Consistency Pre-Audit
+      runPreUploadGatekeeperAudit(state.parsedRows);
+
+      showLoading(false);
       $('uploadBtn').disabled = false;
-      toast(`${fmt(state.parsedRows.length)} record siap divalidasi & diupload.`);
+      if ($('cancelUploadBtn')) $('cancelUploadBtn').classList.remove('d-none');
+      toast(`${fmt(state.parsedRows.length)} record berhasil dipindai & dinilai konsistensinya.`);
     } catch (err) {
       showLoading(false);
       $('uploadBtn').disabled = true;
+      if ($('cancelUploadBtn')) $('cancelUploadBtn').classList.add('d-none');
       toast(err.message, 'error');
+    }
+  }
+
+  function cancelUploadFile() {
+    $('materialFile').value = '';
+    state.selectedFile = null;
+    state.parsedRows = [];
+    $('fileInfo').classList.add('d-none');
+    $('uploadBtn').disabled = true;
+    if ($('cancelUploadBtn')) $('cancelUploadBtn').classList.add('d-none');
+    if ($('preUploadAuditBox')) $('preUploadAuditBox').classList.add('d-none');
+    toast('Pemilihan file dibatalkan.', 'info');
+  }
+
+  function runPreUploadGatekeeperAudit(rows = []) {
+    const box = $('preUploadAuditBox');
+    if (!box || !window.ConsistencyEngine) return;
+
+    box.classList.remove('d-none');
+
+    // Normalisasi format untuk validator
+    const normalizedRows = rows.map((row, idx) => {
+      const desc = (row.material_description || row.item_text_result || '').trim();
+      const firstSegment = desc.split(',')[0] || '';
+      return {
+        id: row.material_code || `Row-${idx + 1}`,
+        material_code: row.material_code || `Row-${idx + 1}`,
+        item_text_result: desc,
+        template_code: row.template_code || (desc.startsWith('SERVICE:') ? 'SVC-01' : 'GEN-01'),
+        major_name: row.noun || row.major_name || firstSegment,
+        modifier1: row.modifier1 || '',
+        modifier2: row.modifier2 || '',
+        modifier3: row.modifier3 || '',
+        manufacture: row.manufacturer || row.manufacture || '',
+        part_no: row.part_number || row.part_no || '',
+        model_no: row.model_no || '',
+        dwg_no: row.dwg_no || '',
+        pos_no: row.pos_no || '',
+        size: row.size || '',
+        material: row.material || '',
+        class: row.class || ''
+      };
+    });
+
+    const audit = window.ConsistencyEngine.auditCatalogDataset(normalizedRows);
+    const summary = audit.summary;
+
+    if ($('preUploadScore')) $('preUploadScore').textContent = `${summary.avg_score}%`;
+    if ($('preUploadCompliant')) $('preUploadCompliant').textContent = fmt(summary.compliant_count);
+    if ($('preUploadWarning')) $('preUploadWarning').textContent = fmt(summary.warning_count);
+    if ($('preUploadCritical')) $('preUploadCritical').textContent = fmt(summary.non_compliant_count);
+
+    const badge = $('preUploadGatekeeperBadge');
+    const warningAlert = $('preUploadWarningAlert');
+    const warningText = $('preUploadWarningText');
+
+    if (summary.avg_score >= 85 && summary.non_compliant_count === 0) {
+      if (badge) {
+        badge.className = 'badge bg-success';
+        badge.innerHTML = '<i class="bi bi-shield-check me-1"></i>LOLOS STANDAR (EXCELLENT)';
+      }
+      if (warningAlert) warningAlert.classList.add('d-none');
+    } else if (summary.non_compliant_count > 0) {
+      if (badge) {
+        badge.className = 'badge bg-danger';
+        badge.innerHTML = `<i class="bi bi-shield-slash me-1"></i>PERHATIAN: ${fmt(summary.non_compliant_count)} DATA KRITIS`;
+      }
+      if (warningAlert) {
+        warningAlert.classList.remove('d-none');
+        if (warningText) {
+          warningText.innerHTML = `Terdeteksi <strong>${fmt(summary.non_compliant_count)} baris</strong> data tidak memenuhi syarat wajib template (misal: part number/manufacturer kosong pada template OEM, atau typo fatal).`;
+        }
+      }
+    } else {
+      if (badge) {
+        badge.className = 'badge bg-warning text-dark';
+        badge.innerHTML = '<i class="bi bi-shield-exclamation me-1"></i>PERINGATAN (WARNING)';
+      }
+      if (warningAlert) {
+        warningAlert.classList.remove('d-none');
+        if (warningText) {
+          warningText.innerHTML = 'Data secara umum memenuhi format, namun memiliki beberapa singkatan yang tidak baku atau format pemisah atribut kurang konsisten.';
+        }
+      }
+    }
+
+    // Render Preview Sampel (Maksimal 10 Baris Pertama)
+    const previewBody = $('preUploadPreviewBody');
+    if (previewBody) {
+      const sample = audit.results.slice(0, 10);
+      previewBody.innerHTML = sample.map((item, idx) => {
+        const statusBadge = item.status === 'COMPLIANT' ? 'bg-success' :
+                            item.status === 'WARNING' ? 'bg-warning text-dark' : 'bg-danger';
+        const note = item.issues.length ? item.issues[0].message : 'Format konsisten';
+        return `
+          <tr>
+            <td>${idx + 1}</td>
+            <td><strong>${escapeHtml(item.material_id)}</strong></td>
+            <td>
+              <div class="text-truncate" style="max-width: 250px;">${escapeHtml(item.item_text)}</div>
+              <small class="badge bg-secondary" style="font-size: 9px;">${escapeHtml(item.template_code)}</small>
+            </td>
+            <td><strong>${item.score}%</strong></td>
+            <td><span class="badge ${statusBadge}">${item.status}</span></td>
+            <td><small class="text-muted text-truncate d-block" style="max-width: 200px;" title="${escapeHtml(note)}">${escapeHtml(note)}</small></td>
+          </tr>
+        `;
+      }).join('');
     }
   }
 
@@ -661,7 +776,6 @@
         modifier_3: 'modifier3',
         template: 'template_code',
         template_code: 'template_code',
-        nomor_part: 'part_number',
         material_group_desc: 'material_group',
         grup: 'material_group',
         uom: 'base_uom',
@@ -687,6 +801,8 @@
       toast(`Upload selesai: ${fmt(r.data.inserted)} masuk, ${fmt(r.data.errors)} error`, r.data.errors ? 'warning' : 'success');
       $('materialFile').value = '';
       $('uploadBtn').disabled = true;
+      if ($('cancelUploadBtn')) $('cancelUploadBtn').classList.add('d-none');
+      if ($('preUploadAuditBox')) $('preUploadAuditBox').classList.add('d-none');
       state.parsedRows = [];
       loadUploadHistory();
       loadDashboard();

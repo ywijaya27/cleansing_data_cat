@@ -119,7 +119,81 @@
           <input id="materialFile" type="file" accept=".csv,.xlsx,.xls" hidden>
         </label>
         <div id="fileInfo" class="file-info d-none"></div>
-        <button id="uploadBtn" type="button" class="btn btn-accent" disabled><i class="bi bi-cloud-arrow-up"></i> Validasi & Upload</button>
+
+        <!-- PRE-UPLOAD GATEKEEPER CONSISTENCY AUDIT PANEL -->
+        <div id="preUploadAuditBox" class="mt-4 p-3 border rounded bg-body-tertiary d-none">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <div>
+              <h3 class="h6 mb-1 text-accent"><i class="bi bi-shield-check me-2"></i>Hasil Pra-Audit Konsistensi Katalog (SCS Gatekeeper)</h3>
+              <p class="text-muted small mb-0">Memverifikasi kelayakan data sebelum disimpan ke database aktif.</p>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+              <span class="badge" id="preUploadGatekeeperBadge">Menganalisis...</span>
+            </div>
+          </div>
+
+          <div class="kpi-grid mb-3">
+            <article class="kpi-card p-2">
+              <span class="kpi-icon teal"><i class="bi bi-speedometer2"></i></span>
+              <div>
+                <small>Skor Rata-Rata</small>
+                <strong id="preUploadScore" class="fs-5">0%</strong>
+              </div>
+            </article>
+            <article class="kpi-card p-2">
+              <span class="kpi-icon green"><i class="bi bi-patch-check"></i></span>
+              <div>
+                <small>Compliant</small>
+                <strong id="preUploadCompliant" class="fs-5">0</strong>
+              </div>
+            </article>
+            <article class="kpi-card p-2">
+              <span class="kpi-icon amber"><i class="bi bi-exclamation-triangle"></i></span>
+              <div>
+                <small>Warning</small>
+                <strong id="preUploadWarning" class="fs-5">0</strong>
+              </div>
+            </article>
+            <article class="kpi-card p-2">
+              <span class="kpi-icon red"><i class="bi bi-x-octagon"></i></span>
+              <div>
+                <small>Kritis (Non-Compliant)</small>
+                <strong id="preUploadCritical" class="fs-5">0</strong>
+              </div>
+            </article>
+          </div>
+
+          <div id="preUploadWarningAlert" class="alert alert-warning py-2 px-3 small d-none mb-3">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i>
+            <span id="preUploadWarningText">Ditemukan data yang melanggar standar template atau ejaan. Anda tetap dapat melanjutkan atau memperbaiki file terlebih dahulu.</span>
+          </div>
+
+          <!-- TABEL PREVIEW DATA SAMPLE -->
+          <div class="table-responsive" style="max-height: 250px;">
+            <table class="data-table small mb-0">
+              <thead>
+                <tr>
+                  <th style="width: 35px;">No</th>
+                  <th>Kode / Part No</th>
+                  <th>Deskripsi &amp; Atribut</th>
+                  <th style="width: 80px;">Skor</th>
+                  <th style="width: 110px;">Status</th>
+                  <th>Catatan Audit</th>
+                </tr>
+              </thead>
+              <tbody id="preUploadPreviewBody">
+                <!-- Diisi JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="d-flex justify-content-end gap-2 mt-3">
+          <button id="cancelUploadBtn" type="button" class="btn btn-sm btn-outline-secondary d-none">
+            <i class="bi bi-x-circle me-1"></i>Batalkan Berkas
+          </button>
+          <button id="uploadBtn" type="button" class="btn btn-accent" disabled><i class="bi bi-cloud-arrow-up"></i> Validasi & Upload ke Database</button>
+        </div>
       </article>
       <article class="panel mt-4">
         <div class="panel-head"><h2>Upload History</h2></div>
