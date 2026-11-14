@@ -1098,6 +1098,14 @@
       ]);
     } catch (e) {
       toast('Gagal menjalankan Analisis AI: ' + e.message, 'error');
+      if (/sesi berakhir|login kembali|unauthorized|401/i.test(e.message)) {
+        sessionStorage.removeItem('admin_session');
+        state.currentUser = { role: 'GUEST', username: 'guest' };
+        applyAccessControl();
+        if (typeof openAdminLoginModal === 'function') {
+          setTimeout(openAdminLoginModal, 600);
+        }
+      }
     } finally {
       showLoading(false);
     }
