@@ -428,8 +428,10 @@ body {
   background: var(--surface-2);
 }
 
-.drop-zone:hover {
+.drop-zone:hover,
+.drop-zone.drag-active {
   border-color: var(--accent);
+  background: rgba(56, 189, 248, 0.08);
 }
 
 .drop-zone i, .drop-zone strong, .drop-zone span {

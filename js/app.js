@@ -377,6 +377,31 @@
 
     // Upload
     $('materialFile').addEventListener('change', handleFile);
+    const dropZoneEl = document.querySelector('.drop-zone');
+    if (dropZoneEl) {
+      ['dragenter', 'dragover'].forEach(eventName => {
+        dropZoneEl.addEventListener(eventName, e => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropZoneEl.classList.add('drag-active');
+        }, false);
+      });
+      ['dragleave', 'drop'].forEach(eventName => {
+        dropZoneEl.addEventListener(eventName, e => {
+          e.preventDefault();
+          e.stopPropagation();
+          dropZoneEl.classList.remove('drag-active');
+        }, false);
+      });
+      dropZoneEl.addEventListener('drop', e => {
+        const dt = e.dataTransfer;
+        const files = dt && dt.files;
+        if (files && files.length) {
+          $('materialFile').files = files;
+          handleFile({ target: { files } });
+        }
+      }, false);
+    }
     $('uploadBtn').addEventListener('click', uploadFile);
     if ($('cancelUploadBtn')) $('cancelUploadBtn').addEventListener('click', cancelUploadFile);
     if ($('enablePreUploadAuditCheck')) {
@@ -959,7 +984,7 @@
       showLoading(true, 'Mengupload ke Supabase...');
       const r = await callServer('uploadMaterials', state.parsedRows, state.selectedFile.name);
       const resData = r.data || {};
-      const inserted = resData.inserted ?? resData.newInserted ?? 0;
+      const inserted = resData.inserted ?? resData.newInserted ?? resData.totalInserted ?? 0;
       const skipped = resData.skipped ?? resData.duplicateSkipped ?? 0;
       const errors = resData.errors ?? 0;
 

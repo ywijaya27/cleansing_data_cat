@@ -351,6 +351,31 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       };
     });
 
+    // Deduplikasi material_code terhadap database dan file internal (Append-only)
+    const existingCodes = new Set();
+    try {
+      const existing = await supabaseFetch('material_raw?select=material_code&limit=50000');
+      if (Array.isArray(existing)) {
+        existing.forEach(item => {
+          if (item.material_code) existingCodes.add(String(item.material_code).trim().toUpperCase());
+        });
+      }
+    } catch (_) {}
+
+    const seenInFile = new Set();
+    const validRows = [];
+    let skippedDuplicates = 0;
+
+    cleanRows.forEach(row => {
+      const upper = String(row.material_code).trim().toUpperCase();
+      if (existingCodes.has(upper) || seenInFile.has(upper)) {
+        skippedDuplicates++;
+        return;
+      }
+      seenInFile.add(upper);
+      validRows.push(row);
+    });
+
     // Catat riwayat upload
     let uploadId = null;
     try {
@@ -358,7 +383,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
         method: 'POST',
         body: [{
           file_name: fileName,
-          total_rows: cleanRows.length,
+          total_rows: rows.length,
           status: 'PROCESSING'
         }]
       });
@@ -367,12 +392,12 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
 
     // Batch insert ke material_raw (chunk per 500 rows)
     const CHUNK_SIZE = 500;
-    for (let i = 0; i < cleanRows.length; i += CHUNK_SIZE) {
-      const chunk = cleanRows.slice(i, i + CHUNK_SIZE);
+    for (let i = 0; i < validRows.length; i += CHUNK_SIZE) {
+      const chunk = validRows.slice(i, i + CHUNK_SIZE);
       await supabaseFetch('material_raw', {
         method: 'POST',
         headers: {
-          'Prefer': 'resolution=merge-duplicates'
+          'Prefer': 'return=minimal'
         },
         body: chunk
       });
@@ -384,13 +409,19 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
           method: 'PATCH',
           body: {
             status: 'COMPLETED',
-            inserted_rows: cleanRows.length
+            inserted_rows: validRows.length
           }
         });
       } catch (_) {}
     }
 
-    return apiResponse(res, 200, true, { totalInserted: cleanRows.length }, `Berhasil mengunggah ${cleanRows.length} material.`);
+    return apiResponse(res, 200, true, {
+      totalInserted: validRows.length,
+      inserted: validRows.length,
+      skipped: skippedDuplicates,
+      errors: 0,
+      totalRows: rows.length
+    }, `Berhasil mengunggah ${validRows.length} material baru (${skippedDuplicates} duplikat dilewati).`);
   } catch (error) {
     return apiResponse(res, 500, false, null, 'Gagal upload: ' + error.message);
   }
