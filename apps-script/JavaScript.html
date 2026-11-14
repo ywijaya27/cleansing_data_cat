@@ -6257,6 +6257,7 @@ window.CATALOG_RULES = {
     allRoles: [],
     users: [],
     consistencyData: [],
+    consistencyPage: 1,
     activeConsistencyItem: null
   };
 
@@ -6348,7 +6349,13 @@ window.CATALOG_RULES = {
 
   function requireAction(action, args = []) {
     if (canAction(action, args)) return true;
-    toast('Anda tidak memiliki izin untuk tindakan ini.', 'error');
+    const role = String(state.currentUser?.role || 'GUEST').toUpperCase();
+    if (role === 'GUEST' || !state.currentUser?.token) {
+      toast('Silakan login sebagai Operator atau Admin untuk menjalankan tindakan ini.', 'warning');
+      if (typeof openAdminLoginModal === 'function') openAdminLoginModal();
+    } else {
+      toast(`Peran Anda (${role}) tidak memiliki izin untuk tindakan ini.`, 'error');
+    }
     return false;
   }
 
@@ -6547,11 +6554,35 @@ window.CATALOG_RULES = {
     // Consistency Audit & Review Actions
     if ($('runConsistencyAuditBtn')) $('runConsistencyAuditBtn').addEventListener('click', runConsistencyAudit);
     if ($('exportConsistencyBtn')) $('exportConsistencyBtn').addEventListener('click', exportConsistencyExcel);
-    if ($('consistencyStatusFilter')) $('consistencyStatusFilter').addEventListener('change', renderConsistencyTable);
-    if ($('consistencyTemplateFilter')) $('consistencyTemplateFilter').addEventListener('change', renderConsistencyTable);
-    if ($('consistencyReviewFilter')) $('consistencyReviewFilter').addEventListener('change', renderConsistencyTable);
-    if ($('consistencySearchInput')) $('consistencySearchInput').addEventListener('input', debounce(renderConsistencyTable, 300));
+    if ($('consistencyStatusFilter')) $('consistencyStatusFilter').addEventListener('change', () => {
+      state.consistencyPage = 1;
+      renderConsistencyTable();
+    });
+    if ($('consistencyTemplateFilter')) $('consistencyTemplateFilter').addEventListener('change', () => {
+      state.consistencyPage = 1;
+      renderConsistencyTable();
+    });
+    if ($('consistencyReviewFilter')) $('consistencyReviewFilter').addEventListener('change', () => {
+      state.consistencyPage = 1;
+      renderConsistencyTable();
+    });
+    if ($('consistencySearchInput')) $('consistencySearchInput').addEventListener('input', debounce(() => {
+      state.consistencyPage = 1;
+      renderConsistencyTable();
+    }, 300));
     if ($('abvSearchInput')) $('abvSearchInput').addEventListener('input', debounce(renderAbbreviationModalTable, 250));
+
+    // Consistency Table Pagination
+    if ($('consistencyPrevPageBtn')) $('consistencyPrevPageBtn').addEventListener('click', () => {
+      if ((state.consistencyPage || 1) > 1) {
+        state.consistencyPage--;
+        renderConsistencyTable();
+      }
+    });
+    if ($('consistencyNextPageBtn')) $('consistencyNextPageBtn').addEventListener('click', () => {
+      state.consistencyPage = (state.consistencyPage || 1) + 1;
+      renderConsistencyTable();
+    });
 
     // Consistency Review Modal Actions
     if ($('btnModalUseSuggested')) $('btnModalUseSuggested').addEventListener('click', () => {
@@ -8145,18 +8176,24 @@ window.CATALOG_RULES = {
     try {
       showLoading(true, 'Mengambil data katalog & menjalankan audit konsistensi standar...');
 
-      // Fetch every page; the server caps each response at 100 records.
+      const limitVal = $('consistencyAuditLimitSelect')?.value || '1000';
+      const maxRowsToFetch = limitVal === 'ALL' ? Infinity : (parseInt(limitVal, 10) || 1000);
+      const batchPageSize = 100;
+
+      // Reset state konsistensi
       state.consistencyData = [];
       state.consistencySummary = null;
+      state.consistencyPage = 1;
       renderConsistencyTable();
       const rawRows = [];
       let page = 1;
       while (true) {
-        const r = await callServer('getConsistencyMaterials', page, 100, '');
+        const r = await callServer('getConsistencyMaterials', page, batchPageSize, '');
         const rows = r.data?.rows || [];
         rawRows.push(...rows);
         showLoading(true, `Memeriksa katalog: ${fmt(rawRows.length)} material dimuat...`);
-        if (rows.length < (r.data?.pageSize || 100)) break;
+        if (rows.length < (r.data?.pageSize || batchPageSize)) break;
+        if (rawRows.length >= maxRowsToFetch) break;
         page++;
       }
 
@@ -8209,9 +8246,10 @@ window.CATALOG_RULES = {
         return item;
       });
 
+      state.consistencyPage = 1;
       updateConsistencySummaryKPIs();
       renderConsistencyTable();
-      toast(`Audit konsistensi selesai. Tingkat kepatuhan: ${auditResult.summary.compliance_rate}%`, 'success');
+      toast(`Audit konsistensi selesai (${fmt(rawRows.length)} data). Kepatuhan: ${auditResult.summary.compliance_rate}%`, 'success');
     } catch (e) {
       toast('Gagal menjalankan audit: ' + e.message, 'error');
     } finally {
@@ -8249,16 +8287,37 @@ window.CATALOG_RULES = {
       });
     }
 
+    const totalFiltered = list.length;
     if ($('consistencyRowCountText')) {
-      $('consistencyRowCountText').textContent = `${list.length} data item ditampilkan (dari total ${state.consistencyData.length})`;
+      $('consistencyRowCountText').textContent = `${fmt(totalFiltered)} data item ditampilkan (dari total ${fmt(state.consistencyData.length)} diaudit)`;
     }
 
     if (!list.length) {
       tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted p-4">Tidak ada data material yang sesuai filter.</td></tr>';
+      if ($('consistencyPagination')) $('consistencyPagination').classList.add('d-none');
       return;
     }
 
-    tbody.innerHTML = list.map((item, idx) => {
+    // Client-side pagination (50 data per halaman)
+    state.consistencyPage = Math.max(1, state.consistencyPage || 1);
+    const pageSize = 50;
+    const totalPages = Math.ceil(totalFiltered / pageSize) || 1;
+    if (state.consistencyPage > totalPages) state.consistencyPage = totalPages;
+
+    const startIdx = (state.consistencyPage - 1) * pageSize;
+    const pagedList = list.slice(startIdx, startIdx + pageSize);
+
+    if ($('consistencyPagination')) {
+      $('consistencyPagination').classList.remove('d-none');
+      if ($('consistencyPageIndicator')) {
+        $('consistencyPageIndicator').textContent = `Halaman ${state.consistencyPage} dari ${totalPages} (${fmt(totalFiltered)} data)`;
+      }
+      if ($('consistencyPrevPageBtn')) $('consistencyPrevPageBtn').disabled = state.consistencyPage <= 1;
+      if ($('consistencyNextPageBtn')) $('consistencyNextPageBtn').disabled = state.consistencyPage >= totalPages;
+    }
+
+    tbody.innerHTML = pagedList.map((item, localIdx) => {
+      const idx = startIdx + localIdx;
       const scoreClass = item.score >= 90 ? 'score-high' : item.score >= 60 ? 'score-mid' : 'score-low';
 
       let statusBadge = '<span class="badge bg-secondary"><i class="bi bi-hourglass-split me-1"></i>Pending</span>';

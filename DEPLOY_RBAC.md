@@ -4,7 +4,7 @@ Konfigurasi aktif proyek ini adalah frontend Vercel dengan backend Google Apps S
 
 ## Urutan penerapan
 
-1. Jalankan `database/MIGRATE_RBAC_CONSISTENCY.sql` di SQL Editor Supabase. Skrip menambah tiga kolom izin tanpa mengganti menu atau izin lama. Jangan menjalankan ulang bagian seed `SETUP_USER_MANAGEMENT.sql` pada database yang sudah dikonfigurasi karena seed tersebut menimpa izin lama.
+1. Jalankan `database/MIGRATE_RBAC_CONSISTENCY.sql` di SQL Editor Supabase. Skrip menambah kolom izin baru (`can_review`, `can_run_consistency`, `can_export_consistency`) dan langsung mengaktifkan menu `consistency` & `reports` untuk role OPERATOR dan ADMIN agar audit katalog langsung dapat digunakan. Jangan menjalankan ulang bagian seed `SETUP_USER_MANAGEMENT.sql` pada database yang sudah dikonfigurasi karena seed tersebut menimpa izin lama.
 2. Pastikan akun ADMIN aktif benar-benar ada pada tabel `app_users`. Login cadangan berbasis password bawaan telah dihapus. Akun yang sudah ada di database tetap digunakan. Untuk instalasi baru, isi `SUPABASE_URL` dan `SUPABASE_SERVICE_KEY` melalui Script Properties di editor Apps Script sebelum login.
 3. Perbarui proyek Apps Script dengan `apps-script/Code.gs`, file baru `apps-script/AccessPolicy.gs`, serta `Index.html`, `JavaScript.html`, dan `Stylesheet.html`. File `AccessPolicy.gs` wajib disertakan. Hapus salinan lama fungsi publik bisnis jika pernah disimpan dalam file `.gs` lain; satu-satunya pintu API bisnis adalah `apiRequest`.
 4. Pada **Deploy → Manage deployments**, edit deployment Web App yang ada dan pilih versi baru agar URL `/exec` tetap sama. Backend baru menolak frontend lama yang belum mengirim token: terapkan pembaruan frontend segera setelahnya dalam waktu pemeliharaan.

@@ -501,7 +501,7 @@ function calculateDataQuality_() {
 function getMaterials_(page, pageSize, search, catalog) {
   try {
     page = Math.max(1, Number(page) || 1);
-    pageSize = Math.min(100, Math.max(10, Number(pageSize) || 25));
+    pageSize = Math.min(catalog ? 1000 : 100, Math.max(10, Number(pageSize) || 25));
     const offset = (page - 1) * pageSize;
 
     let path = 'material_raw?select=id,material_code,material_description,manufacturer,part_number,material_group,base_uom,stock_qty,stock_value,created_at';
@@ -921,14 +921,30 @@ const DEFAULT_GUEST_PERMISSIONS = {
   can_export_consistency: false
 };
 
+const DEFAULT_OPERATOR_PERMISSIONS = {
+  role: 'OPERATOR',
+  role_name: 'Operator Cleansing Data',
+  allowed_menus: ['dashboard', 'upload', 'materials', 'duplicates', 'similarity', 'consistency', 'reports'],
+  can_upload: true,
+  can_run_ai: true,
+  can_merge: false,
+  can_manage_settings: false,
+  can_review: true,
+  can_run_consistency: true,
+  can_export_consistency: true
+};
+
 const DEFAULT_ADMIN_PERMISSIONS = {
   role: 'ADMIN',
   role_name: 'Administrator Sistem',
-  allowed_menus: ['dashboard', 'upload', 'materials', 'duplicates', 'similarity', 'users', 'settings'],
+  allowed_menus: ['dashboard', 'upload', 'materials', 'duplicates', 'similarity', 'consistency', 'reports', 'users', 'settings'],
   can_upload: true,
   can_run_ai: true,
   can_merge: true,
-  can_manage_settings: true
+  can_manage_settings: true,
+  can_review: true,
+  can_run_consistency: true,
+  can_export_consistency: true
 };
 
 function hashPassword_(pass) {
@@ -1010,6 +1026,33 @@ function getSystemAccessControl_() {
       roles = supabaseRequest_('app_role_permissions?select=*', 'get') || [];
     } catch (_) {}
 
+    // Auto-update OPERATOR permissions jika belum mencakup consistency
+    const opRole = roles.find(r => r.role === 'OPERATOR');
+    if (opRole) {
+      let opMenus = opRole.allowed_menus || [];
+      if (typeof opMenus === 'string') { try { opMenus = JSON.parse(opMenus); } catch (_) { opMenus = []; } }
+      let needUpdate = false;
+      if (!opMenus.includes('consistency')) { opMenus.push('consistency'); needUpdate = true; }
+      if (!opMenus.includes('reports')) { opMenus.push('reports'); needUpdate = true; }
+      if (!opRole.can_run_consistency) { opRole.can_run_consistency = true; needUpdate = true; }
+      if (!opRole.can_export_consistency) { opRole.can_export_consistency = true; needUpdate = true; }
+      if (!opRole.can_review) { opRole.can_review = true; needUpdate = true; }
+      if (needUpdate) {
+        opRole.allowed_menus = opMenus;
+        try {
+          supabaseRequest_('app_role_permissions?role=eq.OPERATOR', 'patch', {
+            allowed_menus: opMenus,
+            can_run_consistency: true,
+            can_export_consistency: true,
+            can_review: true,
+            updated_at: new Date().toISOString()
+          });
+        } catch (e) {
+          console.warn('Auto-patch OPERATOR permissions error:', e);
+        }
+      }
+    }
+
     const guestRole = roles.find(r => r.role === 'GUEST') || DEFAULT_GUEST_PERMISSIONS;
     const adminRole = roles.find(r => r.role === 'ADMIN') || DEFAULT_ADMIN_PERMISSIONS;
 
@@ -1022,12 +1065,12 @@ function getSystemAccessControl_() {
 
     return response_(true, {
       guestPermissions: guestRole,
-      allRoles: roles.length ? roles : [DEFAULT_GUEST_PERMISSIONS, DEFAULT_ADMIN_PERMISSIONS]
+      allRoles: roles.length ? roles : [DEFAULT_GUEST_PERMISSIONS, DEFAULT_OPERATOR_PERMISSIONS, DEFAULT_ADMIN_PERMISSIONS]
     }, 'Hak akses sistem dimuat.');
   } catch (error) {
     return response_(true, {
       guestPermissions: DEFAULT_GUEST_PERMISSIONS,
-      allRoles: [DEFAULT_GUEST_PERMISSIONS, DEFAULT_ADMIN_PERMISSIONS]
+      allRoles: [DEFAULT_GUEST_PERMISSIONS, DEFAULT_OPERATOR_PERMISSIONS, DEFAULT_ADMIN_PERMISSIONS]
     }, 'Menggunakan hak akses default.');
   }
 }

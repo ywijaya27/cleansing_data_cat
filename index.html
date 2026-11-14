@@ -512,7 +512,13 @@
           <h2>Audit &amp; Cek Konsistensi Katalog Material</h2>
           <p>Validasi aturan template (TEL SCS / NATO ACodP-1 / MESC), kepatuhan singkatan baku, ejaan/typo, dan format penulisan.</p>
         </div>
-        <div class="d-flex gap-2">
+        <div class="d-flex gap-2 align-items-center flex-wrap">
+          <select id="consistencyAuditLimitSelect" class="form-select form-select-sm" style="width: auto; min-width: 170px;" title="Cakupan Data yang Diaudit">
+            <option value="500">Audit 500 Data Terakhir</option>
+            <option value="1000" selected>Audit 1.000 Data Terakhir</option>
+            <option value="5000">Audit 5.000 Data Terakhir</option>
+            <option value="ALL">Audit Seluruh Database</option>
+          </select>
           <button id="runConsistencyAuditBtn" type="button" class="btn btn-sm btn-accent">
             <i class="bi bi-play-circle me-1"></i>Jalankan Audit Katalog
           </button>
@@ -639,6 +645,17 @@
               </tr>
             </tbody>
           </table>
+        </div>
+        <div class="d-flex justify-content-between align-items-center mt-3 flex-wrap gap-2 d-none" id="consistencyPagination">
+          <span class="text-muted small" id="consistencyPageIndicator">Halaman 1 dari 1</span>
+          <div class="btn-group btn-group-sm">
+            <button type="button" class="btn btn-outline-secondary" id="consistencyPrevPageBtn" disabled>
+              <i class="bi bi-chevron-left me-1"></i>Sebelumnya
+            </button>
+            <button type="button" class="btn btn-outline-secondary" id="consistencyNextPageBtn" disabled>
+              Berikutnya<i class="bi bi-chevron-right ms-1"></i>
+            </button>
+          </div>
         </div>
       </article>
     </section>

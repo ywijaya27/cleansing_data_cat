@@ -164,7 +164,7 @@ app.use('/api', async (req, res, next) => {
 app.get('/api/consistency/materials', async (req, res) => {
   try {
     const page = Math.max(1, Number(req.query.page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(req.query.limit) || 100));
+    const pageSize = Math.min(1000, Math.max(1, Number(req.query.limit) || 100));
     const rows = await supabaseFetch(`material_raw?select=*&order=created_at.desc,id.desc&limit=${pageSize}&offset=${(page - 1) * pageSize}`);
     return apiResponse(res, 200, true, { rows: rows || [], page, pageSize });
   } catch (error) { return apiResponse(res, 500, false, null, error.message); }
