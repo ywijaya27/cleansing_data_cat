@@ -334,6 +334,10 @@ END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 
 -- 4. MESIN UTAMA DENGAN INDEXED FAST BLOCKING, BATCH SLICING & EXTENDED TIMEOUT
+DROP FUNCTION IF EXISTS public.run_material_cleansing_ai(NUMERIC, NUMERIC);
+DROP FUNCTION IF EXISTS public.run_material_cleansing_ai(NUMERIC, NUMERIC, INT);
+DROP FUNCTION IF EXISTS public.run_material_cleansing_ai();
+
 CREATE OR REPLACE FUNCTION public.run_material_cleansing_ai(
     p_min_duplicate_score NUMERIC DEFAULT 75,
     p_min_similarity_score NUMERIC DEFAULT 60,
@@ -765,19 +769,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Overload fallback untuk panggilan 2 argumen
-CREATE OR REPLACE FUNCTION public.run_material_cleansing_ai(
-    p_min_duplicate_score NUMERIC,
-    p_min_similarity_score NUMERIC
-)
-RETURNS JSONB AS $$
-BEGIN
-    RETURN public.run_material_cleansing_ai(p_min_duplicate_score, p_min_similarity_score, 1000);
-END;
-$$ LANGUAGE plpgsql;
-
 -- 5. Hak akses
 GRANT EXECUTE ON FUNCTION public.clean_part_number(TEXT) TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.clean_brand(TEXT) TO anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.run_material_cleansing_ai(NUMERIC, NUMERIC) TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.run_material_cleansing_ai(NUMERIC, NUMERIC, INT) TO anon, authenticated, service_role;
