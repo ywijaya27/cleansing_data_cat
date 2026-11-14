@@ -523,74 +523,90 @@
       </div>
 
       <!-- KPI KONSISTENSI -->
-      <div class="kpi-grid">
-        <article class="kpi-card">
+      <div class="kpi-grid mb-3" style="grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));">
+        <article class="kpi-card p-3">
           <span class="kpi-icon teal"><i class="bi bi-speedometer2"></i></span>
           <div>
             <small>Skor Rata-Rata</small>
             <strong id="kpiConsistencyScore">0%</strong>
           </div>
         </article>
-        <article class="kpi-card">
+        <article class="kpi-card p-3">
           <span class="kpi-icon green"><i class="bi bi-patch-check"></i></span>
           <div>
             <small>Compliant (Lolos)</small>
             <strong id="kpiCompliantCount">0</strong>
           </div>
         </article>
-        <article class="kpi-card">
+        <article class="kpi-card p-3">
           <span class="kpi-icon amber"><i class="bi bi-exclamation-triangle"></i></span>
           <div>
             <small>Peringatan (Warning)</small>
             <strong id="kpiWarningCount">0</strong>
           </div>
         </article>
-        <article class="kpi-card">
+        <article class="kpi-card p-3">
           <span class="kpi-icon red"><i class="bi bi-x-octagon"></i></span>
           <div>
-            <small>Non-Compliant (Kritis)</small>
+            <small>Non-Compliant</small>
             <strong id="kpiNonCompliantCount">0</strong>
           </div>
         </article>
-        <article class="kpi-card">
-          <span class="kpi-icon blue"><i class="bi bi-spellcheck"></i></span>
+        <article class="kpi-card p-3">
+          <span class="kpi-icon blue"><i class="bi bi-hourglass-split"></i></span>
           <div>
-            <small>Typo Terdeteksi</small>
-            <strong id="kpiTypoCount">0</strong>
+            <small>Menunggu Review</small>
+            <strong id="kpiReviewPendingCount">0</strong>
+          </div>
+        </article>
+        <article class="kpi-card p-3">
+          <span class="kpi-icon green"><i class="bi bi-check2-circle"></i></span>
+          <div>
+            <small>Selesai Direview</small>
+            <strong id="kpiReviewedCount">0</strong>
           </div>
         </article>
       </div>
 
       <!-- TAB FILTER & PENCARIAN -->
-      <article class="panel mt-4 mb-4">
-        <div class="row g-3 align-items-center">
-          <div class="col-md-4">
+      <article class="panel mt-3 mb-4">
+        <div class="row g-2 align-items-center">
+          <div class="col-lg-3 col-md-6">
             <div class="search-box">
               <i class="bi bi-search"></i>
-              <input id="consistencySearchInput" type="search" placeholder="Cari material, part no, atau deskripsi..." class="form-control-custom">
+              <input id="consistencySearchInput" type="search" placeholder="Cari kode, noun, atau teks..." class="form-control-custom">
             </div>
           </div>
-          <div class="col-md-3">
-            <select id="consistencyStatusFilter" class="form-control-custom">
-              <option value="ALL">Semua Status Kepatuhan</option>
-              <option value="NON_COMPLIANT">Hanya Non-Compliant (Kritis &lt; 60%)</option>
-              <option value="WARNING">Hanya Peringatan (60% - 89%)</option>
-              <option value="COMPLIANT">Hanya Compliant (&gt;= 90%)</option>
+          <div class="col-lg-2 col-md-3">
+            <select id="consistencyStatusFilter" class="form-control-custom" title="Filter Status Kepatuhan">
+              <option value="ALL">Semua Kepatuhan</option>
+              <option value="NON_COMPLIANT">Non-Compliant (&lt;60%)</option>
+              <option value="WARNING">Peringatan (60-89%)</option>
+              <option value="COMPLIANT">Compliant (&gt;=90%)</option>
             </select>
           </div>
-          <div class="col-md-3">
-            <select id="consistencyTemplateFilter" class="form-control-custom">
-              <option value="ALL">Semua Template (GEN, UNT, OEM, STR, dll.)</option>
+          <div class="col-lg-2 col-md-3">
+            <select id="consistencyTemplateFilter" class="form-control-custom" title="Filter Template Item">
+              <option value="ALL">Semua Template</option>
               <option value="GEN">GEN (General Item)</option>
               <option value="UNT">UNT (Unit Item)</option>
-              <option value="OEM">OEM (Original Equipment Mfr)</option>
+              <option value="OEM">OEM (OEM Parts)</option>
               <option value="STR">STR (Construction Item)</option>
               <option value="SPC">SPC (Specific Item)</option>
               <option value="MFG">MFG (Manufacturing Item)</option>
               <option value="SVC">SVC (Service Item)</option>
             </select>
           </div>
-          <div class="col-md-2 text-end">
+          <div class="col-lg-3 col-md-6">
+            <select id="consistencyReviewFilter" class="form-control-custom" title="Filter Status Hasil Review">
+              <option value="ALL">Semua Status Review</option>
+              <option value="PENDING">Menunggu Review (Pending)</option>
+              <option value="APPROVED_SUGGESTION">Saran Diterima (Approved)</option>
+              <option value="REVISED_MANUAL">Direvisi Manual (Revised)</option>
+              <option value="REJECTED_ORIGINAL">Ditolak / Tetap Asli (Rejected)</option>
+            </select>
+          </div>
+          <div class="col-lg-2 col-md-6 text-end">
             <button id="viewAbvModalBtn" type="button" class="btn btn-sm btn-outline-secondary w-100" data-bs-toggle="modal" data-bs-target="#abbreviationModal">
               <i class="bi bi-book me-1"></i>Kamus Singkatan
             </button>
@@ -598,10 +614,10 @@
         </div>
       </article>
 
-      <!-- TABEL HASIL AUDIT KONSISTENSI -->
+      <!-- TABEL HASIL AUDIT KONSISTENSI DENGAN PEMBANDING -->
       <article class="panel">
-        <div class="d-flex justify-content-between align-items-center mb-3">
-          <h3 class="h6 mb-0"><i class="bi bi-list-check me-2 text-accent"></i>Rincian Evaluasi Kepatuhan Standar Per Item</h3>
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+          <h3 class="h6 mb-0"><i class="bi bi-list-check me-2 text-accent"></i>Evaluasi &amp; Validasi Pembanding Katalog Material</h3>
           <span class="text-muted small" id="consistencyRowCountText">0 data item dievaluasi</span>
         </div>
         <div class="table-responsive">
@@ -609,16 +625,17 @@
             <thead>
               <tr>
                 <th style="width: 40px;">No</th>
-                <th style="width: 100px;">Template</th>
-                <th>Deskripsi Material Master</th>
-                <th style="width: 120px;">Skor Standar</th>
-                <th style="width: 130px;">Status</th>
-                <th>Temuan Ketidakkonsistenan &amp; Saran Standar</th>
+                <th style="width: 110px;">Kode &amp; Template</th>
+                <th style="width: 32%;">Deskripsi Asli (Original Text)</th>
+                <th style="width: 35%;">Deskripsi Saran Standar Katalog (SCS)</th>
+                <th style="width: 90px;">Skor</th>
+                <th style="width: 120px;">Status Review</th>
+                <th style="width: 100px;">Aksi</th>
               </tr>
             </thead>
             <tbody id="consistencyTableBody">
               <tr>
-                <td colspan="6" class="text-center text-muted p-4">Klik tombol <strong>"Jalankan Audit Katalog"</strong> untuk memulai evaluasi data material.</td>
+                <td colspan="7" class="text-center text-muted p-4">Klik tombol <strong>"Jalankan Audit Katalog"</strong> untuk memulai evaluasi data material.</td>
               </tr>
             </tbody>
           </table>
@@ -1053,6 +1070,134 @@
             </button>
             <button id="btnMergeDuplicate" type="button" class="btn btn-accent btn-sm">
               <i class="bi bi-diagram-2-fill me-1"></i>Gabungkan (Merge &amp; Obsolete)
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CONSISTENCY SIDE-BY-SIDE REVIEW & VALIDATION MODAL -->
+  <div class="modal fade" id="consistencyReviewModal" tabindex="-1" aria-labelledby="consistencyReviewModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+      <div class="modal-content panel p-0 border-0 shadow-lg">
+        <div class="modal-header border-bottom p-3 d-flex justify-content-between align-items-center">
+          <div class="d-flex align-items-center gap-2 flex-wrap">
+            <h5 class="modal-title h6 mb-0" id="consistencyReviewModalLabel">
+              <i class="bi bi-check2-square text-accent me-2"></i>Review &amp; Validasi Susunan Katalog Material
+            </h5>
+            <span id="modalConsistencyMatCode" class="badge bg-secondary font-monospace">MAT-000000</span>
+            <span id="modalConsistencyTemplateBadge" class="badge bg-info text-dark">GEN</span>
+            <span id="modalConsistencyReviewBadge" class="badge bg-secondary">MENUNGGU REVIEW</span>
+          </div>
+          <div class="d-flex align-items-center gap-2">
+            <span id="modalConsistencyScoreBadge" class="badge-score score-high">100%</span>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
+          </div>
+        </div>
+
+        <div class="modal-body p-4">
+          <!-- Banner Standar Urutan Katalog -->
+          <div class="alert alert-dark p-2 mb-3 border small d-flex align-items-center gap-2" style="background: var(--surface-2); border-color: var(--border) !important;">
+            <i class="bi bi-info-circle-fill text-accent fs-5"></i>
+            <div>
+              <strong>Standar Susunan Katalog (SCS / NATO / MESC):</strong>
+              <div class="text-muted mt-1">
+                <code>1. NOUN</code> <i class="bi bi-arrow-right mx-1 text-accent"></i>
+                <code>2. MODIFIER(S)</code> <i class="bi bi-arrow-right mx-1 text-accent"></i>
+                <code>3. Characteristics &amp; Values</code> <i class="bi bi-arrow-right mx-1 text-accent"></i>
+                <code>4. Dimensions + Material + Class/Grade/Sched</code> <i class="bi bi-arrow-right mx-1 text-accent"></i>
+                <code>5. Equipment Name + Ref (Model/Dwg/Pos)</code>
+              </div>
+            </div>
+          </div>
+
+          <!-- Side-by-Side Comparison Grid (Pembanding Teks Asli vs Teks Saran) -->
+          <div class="row g-3 mb-3">
+            <!-- Kolom Kiri: Teks Asli & Temuan -->
+            <div class="col-md-6">
+              <div class="card p-3 border h-100" style="background: var(--surface-2); border-color: var(--border) !important;">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                  <span class="badge bg-secondary"><i class="bi bi-file-earmark-text me-1"></i>Teks Asli (Original Text)</span>
+                  <small class="text-muted">Data Sumber</small>
+                </div>
+                <div class="p-3 rounded mb-3 border font-monospace text-wrap" id="modalConsistencyOriginalText" style="background: var(--surface); min-height: 80px; word-break: break-word;">
+                  -
+                </div>
+                <h6 class="small fw-bold text-danger mb-2"><i class="bi bi-exclamation-triangle-fill me-1"></i>Temuan Pelanggaran / Ketidakkonsistenan:</h6>
+                <div id="modalConsistencyIssuesContainer" class="small" style="max-height: 180px; overflow-y: auto;">
+                  -
+                </div>
+              </div>
+            </div>
+
+            <!-- Kolom Kanan: Teks Saran Standar & Breakdown Segmen -->
+            <div class="col-md-6">
+              <div class="card p-3 border h-100" style="background: rgba(0, 200, 150, 0.05); border-color: var(--accent) !important;">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                  <span class="badge bg-success"><i class="bi bi-stars me-1"></i>Teks Saran Standar (Recommended Standard)</span>
+                  <small class="text-accent fw-bold">SCS / NATO Aligned</small>
+                </div>
+                <div class="p-3 rounded mb-3 border font-monospace text-wrap text-accent fw-semibold" id="modalConsistencySuggestedText" style="background: var(--surface); min-height: 80px; word-break: break-word; border-color: rgba(0, 200, 150, 0.3) !important;">
+                  -
+                </div>
+                <h6 class="small fw-bold text-accent mb-2"><i class="bi bi-diagram-3-fill me-1"></i>Susunan 5 Segmen Terstandarisasi:</h6>
+                <div id="modalConsistencySegmentsContainer" class="small" style="max-height: 180px; overflow-y: auto;">
+                  -
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Checklist Validasi Kepatuhan -->
+          <div class="card p-3 border mb-3" style="background: var(--surface);">
+            <h6 class="small fw-bold mb-2"><i class="bi bi-clipboard-check me-1 text-accent"></i>Checklist Evaluasi Standar:</h6>
+            <div class="row g-2 small" id="modalConsistencyCheckpoints">
+              <div class="col-md-3 col-6" id="chkOrderCol"><i class="bi bi-check-circle-fill text-success me-1"></i>Urutan NOUN &amp; Modifier</div>
+              <div class="col-md-3 col-6" id="chkPunctCol"><i class="bi bi-check-circle-fill text-success me-1"></i>Tanda Baca &amp; Delimiter</div>
+              <div class="col-md-3 col-6" id="chkAbbrCol"><i class="bi bi-check-circle-fill text-success me-1"></i>Singkatan Baku Kamus</div>
+              <div class="col-md-3 col-6" id="chkCompletenessCol"><i class="bi bi-check-circle-fill text-success me-1"></i>Kelengkapan Template</div>
+            </div>
+          </div>
+
+          <!-- Area Keputusan Final & Revisi Manual -->
+          <div class="card p-3 border" style="background: var(--surface-2); border-color: var(--border) !important;">
+            <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+              <label for="modalConsistencyFinalInput" class="small fw-bold mb-0">
+                <i class="bi bi-pencil-square me-1 text-primary"></i>Deskripsi Final Hasil Review (Dapat Diedit Manual):
+              </label>
+              <div class="btn-group btn-group-sm">
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="btnModalUseSuggested">
+                  <i class="bi bi-arrow-down-left me-1"></i>Pakai Saran Standar
+                </button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="btnModalUseOriginal">
+                  <i class="bi bi-arrow-repeat me-1"></i>Pakai Teks Asli
+                </button>
+              </div>
+            </div>
+            <textarea id="modalConsistencyFinalInput" rows="2" class="form-control-custom font-monospace text-wrap mb-2" placeholder="Masukkan atau sesuaikan deskripsi hasil review di sini..."></textarea>
+
+            <div class="row g-2 align-items-center">
+              <div class="col-md-8">
+                <input id="modalConsistencyReviewNotes" type="text" class="form-control-custom" placeholder="Catatan review (opsional, misal: disetujui sesuai katalog pabrikan)">
+              </div>
+              <div class="col-md-4 text-md-end text-muted small" id="modalConsistencyAuditTrail">
+                Belum pernah direview
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer border-top p-3 d-flex justify-content-between flex-wrap gap-2">
+          <button id="btnRejectConsistencyModal" type="button" class="btn btn-outline-danger btn-sm">
+            <i class="bi bi-x-circle me-1"></i>Tolak / Pertahankan Asli
+          </button>
+          <div class="d-flex gap-2">
+            <button id="btnSaveConsistencyRevisionModal" type="button" class="btn btn-outline-primary btn-sm">
+              <i class="bi bi-pencil-fill me-1"></i>Simpan Revisi Manual
+            </button>
+            <button id="btnAcceptConsistencyModal" type="button" class="btn btn-accent btn-sm">
+              <i class="bi bi-check2-circle me-1"></i>Terima Saran Standar
             </button>
           </div>
         </div>

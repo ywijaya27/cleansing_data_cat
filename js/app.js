@@ -32,7 +32,8 @@
     accessControl: Object.assign({}, DEFAULT_GUEST_ACCESS),
     allRoles: [],
     users: [],
-    consistencyData: []
+    consistencyData: [],
+    activeConsistencyItem: null
   };
 
   const titles = {
@@ -319,13 +320,29 @@
     $('menuToggle').addEventListener('click', () => $('sidebar').classList.toggle('open'));
     $('themeToggle').addEventListener('click', toggleTheme);
 
-    // Consistency Audit Actions
+    // Consistency Audit & Review Actions
     if ($('runConsistencyAuditBtn')) $('runConsistencyAuditBtn').addEventListener('click', runConsistencyAudit);
     if ($('exportConsistencyBtn')) $('exportConsistencyBtn').addEventListener('click', exportConsistencyExcel);
     if ($('consistencyStatusFilter')) $('consistencyStatusFilter').addEventListener('change', renderConsistencyTable);
     if ($('consistencyTemplateFilter')) $('consistencyTemplateFilter').addEventListener('change', renderConsistencyTable);
+    if ($('consistencyReviewFilter')) $('consistencyReviewFilter').addEventListener('change', renderConsistencyTable);
     if ($('consistencySearchInput')) $('consistencySearchInput').addEventListener('input', debounce(renderConsistencyTable, 300));
     if ($('abvSearchInput')) $('abvSearchInput').addEventListener('input', debounce(renderAbbreviationModalTable, 250));
+
+    // Consistency Review Modal Actions
+    if ($('btnModalUseSuggested')) $('btnModalUseSuggested').addEventListener('click', () => {
+      if (state.activeConsistencyItem && $('modalConsistencyFinalInput')) {
+        $('modalConsistencyFinalInput').value = state.activeConsistencyItem.suggested_text || '';
+      }
+    });
+    if ($('btnModalUseOriginal')) $('btnModalUseOriginal').addEventListener('click', () => {
+      if (state.activeConsistencyItem && $('modalConsistencyFinalInput')) {
+        $('modalConsistencyFinalInput').value = state.activeConsistencyItem.item_text || '';
+      }
+    });
+    if ($('btnAcceptConsistencyModal')) $('btnAcceptConsistencyModal').addEventListener('click', () => saveConsistencyDecision('APPROVED_SUGGESTION'));
+    if ($('btnSaveConsistencyRevisionModal')) $('btnSaveConsistencyRevisionModal').addEventListener('click', () => saveConsistencyDecision('REVISED_MANUAL'));
+    if ($('btnRejectConsistencyModal')) $('btnRejectConsistencyModal').addEventListener('click', () => saveConsistencyDecision('REJECTED_ORIGINAL'));
 
     // Upload
     $('materialFile').addEventListener('change', handleFile);
@@ -1851,8 +1868,46 @@
   // MODUL CEK KONSISTENSI & STANDAR KATALOG (TEL SCS, NATO ACodP-1, MESC)
   // =============================================================================
 
+  const CONSISTENCY_STORAGE_KEY = 'matclean_consistency_reviews';
+
+  function getSavedConsistencyReviews() {
+    try {
+      return JSON.parse(sessionStorage.getItem(CONSISTENCY_STORAGE_KEY) || '{}');
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function saveConsistencyReviewToStorage(matId, reviewData) {
+    try {
+      const all = getSavedConsistencyReviews();
+      all[matId] = reviewData;
+      sessionStorage.setItem(CONSISTENCY_STORAGE_KEY, JSON.stringify(all));
+    } catch (e) {
+      console.warn('Gagal menyimpan review konsistensi ke cache:', e);
+    }
+  }
+
+  function updateConsistencySummaryKPIs() {
+    const list = state.consistencyData || [];
+    const pendingCount = list.filter(x => (x.review_status || 'PENDING') === 'PENDING').length;
+    const reviewedCount = list.length - pendingCount;
+
+    if ($('kpiReviewPendingCount')) $('kpiReviewPendingCount').textContent = fmt(pendingCount);
+    if ($('kpiReviewedCount')) $('kpiReviewedCount').textContent = fmt(reviewedCount);
+
+    if (state.consistencySummary) {
+      if ($('kpiConsistencyScore')) $('kpiConsistencyScore').textContent = `${state.consistencySummary.avg_score}%`;
+      if ($('kpiCompliantCount')) $('kpiCompliantCount').textContent = fmt(state.consistencySummary.compliant_count);
+      if ($('kpiWarningCount')) $('kpiWarningCount').textContent = fmt(state.consistencySummary.warning_count);
+      if ($('kpiNonCompliantCount')) $('kpiNonCompliantCount').textContent = fmt(state.consistencySummary.non_compliant_count);
+      if ($('kpiTypoCount')) $('kpiTypoCount').textContent = fmt(state.consistencySummary.typo_count);
+    }
+  }
+
   function loadConsistencyView() {
     renderAbbreviationModalTable();
+    updateConsistencySummaryKPIs();
     renderConsistencyTable();
   }
 
@@ -1864,7 +1919,7 @@
     }
 
     try {
-      showLoading(true, 'Mengambil data katalog & menjalankan audit konsistensi...');
+      showLoading(true, 'Mengambil data katalog & menjalankan audit konsistensi standar...');
       
       // Fetch every page; the server caps each response at 100 records.
       state.consistencyData = [];
@@ -1889,7 +1944,6 @@
       // Format row agar field sesuai standar engine (noun, modifiers, template, etc.)
       const normalizedRows = rawRows.map(row => {
         const desc = (row.material_description || row.item_text_result || '').trim();
-        // Coba ekstrak noun dari kata pertama sebelum koma jika belum ada
         const firstSegment = desc.split(',')[0] || '';
         return {
           id: row.id || row.material_code,
@@ -1913,15 +1967,25 @@
 
       const auditResult = window.ConsistencyEngine.auditCatalogDataset(normalizedRows);
       state.consistencySummary = auditResult.summary;
-      state.consistencyData = auditResult.results;
 
-      // Update KPI Cards
-      if ($('kpiConsistencyScore')) $('kpiConsistencyScore').textContent = `${auditResult.summary.avg_score}%`;
-      if ($('kpiCompliantCount')) $('kpiCompliantCount').textContent = fmt(auditResult.summary.compliant_count);
-      if ($('kpiWarningCount')) $('kpiWarningCount').textContent = fmt(auditResult.summary.warning_count);
-      if ($('kpiNonCompliantCount')) $('kpiNonCompliantCount').textContent = fmt(auditResult.summary.non_compliant_count);
-      if ($('kpiTypoCount')) $('kpiTypoCount').textContent = fmt(auditResult.summary.typo_count);
+      // Merge dengan keputusan review yang tersimpan di storage
+      const savedReviews = getSavedConsistencyReviews();
+      state.consistencyData = auditResult.results.map(item => {
+        const saved = savedReviews[item.material_id];
+        if (saved) {
+          return {
+            ...item,
+            review_status: saved.review_status || item.review_status,
+            final_text: saved.final_text || item.suggested_text,
+            review_notes: saved.review_notes || '',
+            reviewer: saved.reviewer || null,
+            review_timestamp: saved.review_timestamp || null
+          };
+        }
+        return item;
+      });
 
+      updateConsistencySummaryKPIs();
       renderConsistencyTable();
       toast(`Audit konsistensi selesai. Tingkat kepatuhan: ${auditResult.summary.compliance_rate}%`, 'success');
     } catch (e) {
@@ -1937,6 +2001,7 @@
 
     const statusFilter = $('consistencyStatusFilter')?.value || 'ALL';
     const tempFilter = $('consistencyTemplateFilter')?.value || 'ALL';
+    const reviewFilter = $('consistencyReviewFilter')?.value || 'ALL';
     const search = ($('consistencySearchInput')?.value || '').trim().toLowerCase();
 
     let list = state.consistencyData || [];
@@ -1947,12 +2012,16 @@
     if (tempFilter !== 'ALL') {
       list = list.filter(x => (x.template_code || '').startsWith(tempFilter));
     }
+    if (reviewFilter !== 'ALL') {
+      list = list.filter(x => (x.review_status || 'PENDING') === reviewFilter);
+    }
     if (search) {
       list = list.filter(x => {
         const text = (x.item_text || '').toLowerCase();
+        const sugg = (x.suggested_text || '').toLowerCase();
         const code = String(x.material_id || '').toLowerCase();
         const temp = (x.template_code || '').toLowerCase();
-        return text.includes(search) || code.includes(search) || temp.includes(search);
+        return text.includes(search) || sugg.includes(search) || code.includes(search) || temp.includes(search);
       });
     }
 
@@ -1961,52 +2030,245 @@
     }
 
     if (!list.length) {
-      tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted p-4">Tidak ada data material yang sesuai filter.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted p-4">Tidak ada data material yang sesuai filter.</td></tr>';
       return;
     }
 
     tbody.innerHTML = list.map((item, idx) => {
-      const statusBadge = item.status === 'COMPLIANT' ? 'bg-success' :
-                          item.status === 'WARNING' ? 'bg-warning text-dark' : 'bg-danger';
-
       const scoreClass = item.score >= 90 ? 'score-high' : item.score >= 60 ? 'score-mid' : 'score-low';
 
-      // Format issues list
-      const issuesHtml = item.issues.length ? item.issues.map(iss => {
-        const icon = iss.severity === 'critical' ? 'bi-x-circle-fill text-danger' :
-                     iss.severity === 'warning' ? 'bi-exclamation-triangle-fill text-warning' : 'bi-info-circle-fill text-info';
-        return `
-          <div class="mb-1 small">
-            <i class="bi ${icon} me-1"></i>
-            <span class="fw-semibold">${escapeHtml(iss.type)}:</span> ${escapeHtml(iss.message)}
-          </div>
-        `;
-      }).join('') : '<span class="text-success small"><i class="bi bi-check-circle-fill me-1"></i>Format & atribut konsisten sesuai standar.</span>';
+      let statusBadge = '<span class="badge bg-secondary"><i class="bi bi-hourglass-split me-1"></i>Pending</span>';
+      if (item.review_status === 'APPROVED_SUGGESTION') {
+        statusBadge = '<span class="badge bg-success"><i class="bi bi-check2-circle me-1"></i>Saran Diterima</span>';
+      } else if (item.review_status === 'REVISED_MANUAL') {
+        statusBadge = '<span class="badge bg-primary"><i class="bi bi-pencil-fill me-1"></i>Revisi Manual</span>';
+      } else if (item.review_status === 'REJECTED_ORIGINAL') {
+        statusBadge = '<span class="badge bg-danger"><i class="bi bi-x-circle me-1"></i>Tetap Asli</span>';
+      }
 
       return `
         <tr>
           <td>${idx + 1}</td>
           <td>
-            <span class="badge bg-secondary">${escapeHtml(item.template_code || 'GEN')}</span>
+            <strong class="font-monospace">${escapeHtml(item.material_id)}</strong>
+            <div class="mt-1"><span class="badge bg-secondary">${escapeHtml(item.template_code || 'GEN')}</span></div>
           </td>
           <td>
-            <strong>${escapeHtml(item.material_id)}</strong>
-            <div class="small text-muted mt-1 font-monospace" style="word-break: break-all;">${escapeHtml(item.item_text)}</div>
+            <div class="font-monospace small text-wrap text-break" style="max-width: 320px;">${escapeHtml(item.item_text)}</div>
+            ${item.issues.length ? `<span class="badge bg-light text-danger border border-danger mt-1"><i class="bi bi-exclamation-circle me-1"></i>${item.issues.length} isu</span>` : '<span class="badge bg-light text-success border border-success mt-1"><i class="bi bi-check me-1"></i>Format rapi</span>'}
+          </td>
+          <td>
+            <div class="font-monospace small text-wrap text-break text-accent fw-semibold" style="max-width: 340px;">${escapeHtml(item.suggested_text)}</div>
+            ${item.final_text && item.final_text !== item.suggested_text && item.review_status !== 'PENDING' ? `<div class="small text-muted mt-1 fst-italic">Final: ${escapeHtml(item.final_text)}</div>` : ''}
           </td>
           <td>
             <span class="badge-score ${scoreClass}">${item.score}%</span>
           </td>
           <td>
-            <span class="badge ${statusBadge}">${item.status}</span>
+            ${statusBadge}
           </td>
           <td>
-            <div style="max-height: 120px; overflow-y: auto;">
-              ${issuesHtml}
-            </div>
+            <button type="button" class="btn btn-sm btn-outline-primary btn-review-consistency" data-matid="${escapeHtml(item.material_id)}" title="Buka Review Pembanding & Validasi">
+              <i class="bi bi-pencil-square me-1"></i>Review
+            </button>
           </td>
         </tr>
       `;
     }).join('');
+
+    // Bind event tombol review
+    tbody.querySelectorAll('.btn-review-consistency').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const matId = btn.dataset.matid;
+        const target = state.consistencyData.find(x => String(x.material_id) === String(matId));
+        if (target) openConsistencyReviewModal(target);
+      });
+    });
+  }
+
+  function openConsistencyReviewModal(item) {
+    if (!item) return;
+    state.activeConsistencyItem = item;
+
+    // Header info
+    if ($('modalConsistencyMatCode')) $('modalConsistencyMatCode').textContent = item.material_id;
+    if ($('modalConsistencyTemplateBadge')) $('modalConsistencyTemplateBadge').textContent = item.template_code || 'GEN';
+
+    // Status Badge
+    if ($('modalConsistencyReviewBadge')) {
+      const st = item.review_status || 'PENDING';
+      let badgeHtml = '<span class="badge bg-secondary"><i class="bi bi-hourglass-split me-1"></i>MENUNGGU REVIEW</span>';
+      if (st === 'APPROVED_SUGGESTION') {
+        badgeHtml = '<span class="badge bg-success"><i class="bi bi-check2-circle me-1"></i>SARAN DITERIMA</span>';
+      } else if (st === 'REVISED_MANUAL') {
+        badgeHtml = '<span class="badge bg-primary"><i class="bi bi-pencil-fill me-1"></i>DIREVISI MANUAL</span>';
+      } else if (st === 'REJECTED_ORIGINAL') {
+        badgeHtml = '<span class="badge bg-danger"><i class="bi bi-x-circle me-1"></i>TETAP ASLI</span>';
+      }
+      $('modalConsistencyReviewBadge').innerHTML = badgeHtml;
+    }
+
+    // Score Badge
+    if ($('modalConsistencyScoreBadge')) {
+      const sc = item.score || 0;
+      const cls = sc >= 90 ? 'score-high' : sc >= 60 ? 'score-mid' : 'score-low';
+      $('modalConsistencyScoreBadge').className = `badge-score ${cls}`;
+      $('modalConsistencyScoreBadge').textContent = `${sc}% Kepatuhan`;
+    }
+
+    // Left Card: Original Text & Issues
+    if ($('modalConsistencyOriginalText')) {
+      $('modalConsistencyOriginalText').textContent = item.item_text || '-';
+    }
+    if ($('modalConsistencyIssuesContainer')) {
+      if (!item.issues || !item.issues.length) {
+        $('modalConsistencyIssuesContainer').innerHTML = `
+          <div class="text-success p-2">
+            <i class="bi bi-check-circle-fill me-1"></i>Penulisan dan susunan tanda baca/singkatan sesuai standar.
+          </div>
+        `;
+      } else {
+        $('modalConsistencyIssuesContainer').innerHTML = item.issues.map(iss => {
+          const icon = iss.severity === 'critical' ? 'bi-x-circle-fill text-danger' :
+                       iss.severity === 'warning' ? 'bi-exclamation-triangle-fill text-warning' : 'bi-info-circle-fill text-info';
+          return `
+            <div class="mb-2 p-1 border-bottom border-secondary border-opacity-25">
+              <i class="bi ${icon} me-1"></i>
+              <strong class="text-uppercase small">${escapeHtml(iss.type)}:</strong>
+              <div class="ms-3 text-muted">${escapeHtml(iss.message)}</div>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+
+    // Right Card: Suggested Standard Text & 5-Segment Breakdown
+    if ($('modalConsistencySuggestedText')) {
+      $('modalConsistencySuggestedText').textContent = item.suggested_text || '-';
+    }
+    if ($('modalConsistencySegmentsContainer')) {
+      const seg = item.segments || {};
+      const formatSegmentList = list => {
+        if (!list || !list.length) return '<span class="text-muted fst-italic">Tidak ditemukan</span>';
+        return list.map(x => typeof x === 'string' ? escapeHtml(x) : escapeHtml(x.raw || x.value || '')).join(', ');
+      };
+
+      $('modalConsistencySegmentsContainer').innerHTML = `
+        <div class="d-flex flex-column gap-2">
+          <div class="p-2 rounded border border-secondary border-opacity-25" style="background: var(--surface);">
+            <div class="small fw-bold text-accent"><i class="bi bi-1-circle-fill me-1"></i>NOUN:</div>
+            <div class="font-monospace small ms-3">${escapeHtml(seg.noun || '-')}</div>
+          </div>
+          <div class="p-2 rounded border border-secondary border-opacity-25" style="background: var(--surface);">
+            <div class="small fw-bold text-info"><i class="bi bi-2-circle-fill me-1"></i>MODIFIER(S):</div>
+            <div class="font-monospace small ms-3">${escapeHtml((seg.modifiers || []).join(', ') || '-')}</div>
+          </div>
+          <div class="p-2 rounded border border-secondary border-opacity-25" style="background: var(--surface);">
+            <div class="small fw-bold text-primary"><i class="bi bi-3-circle-fill me-1"></i>Characteristics and Values:</div>
+            <div class="font-monospace small ms-3">${formatSegmentList(seg.characteristics)}</div>
+          </div>
+          <div class="p-2 rounded border border-secondary border-opacity-25" style="background: var(--surface);">
+            <div class="small fw-bold text-warning"><i class="bi bi-4-circle-fill me-1"></i>Dimensions + Material + Class/Grade/Schedule:</div>
+            <div class="font-monospace small ms-3">${formatSegmentList(seg.dimensions_material)}</div>
+          </div>
+          <div class="p-2 rounded border border-secondary border-opacity-25" style="background: var(--surface);">
+            <div class="small fw-bold text-secondary"><i class="bi bi-5-circle-fill me-1"></i>Equipment Name + Ref (Model/Dwg/Pos):</div>
+            <div class="font-monospace small ms-3">${formatSegmentList(seg.equipment_ref)}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    // Checkpoints Checklist
+    const cp = item.checkpoints || { order_ok: true, punctuation_ok: true, abbreviations_ok: true, completeness_ok: true };
+    const renderCheckIcon = ok => ok ? '<i class="bi bi-check-circle-fill text-success me-1"></i>' : '<i class="bi bi-x-circle-fill text-danger me-1"></i>';
+    if ($('chkOrderCol')) $('chkOrderCol').innerHTML = `${renderCheckIcon(cp.order_ok)}Urutan NOUN &amp; Modifier`;
+    if ($('chkPunctCol')) $('chkPunctCol').innerHTML = `${renderCheckIcon(cp.punctuation_ok)}Tanda Baca &amp; Delimiter`;
+    if ($('chkAbbrCol')) $('chkAbbrCol').innerHTML = `${renderCheckIcon(cp.abbreviations_ok)}Singkatan Baku Kamus`;
+    if ($('chkCompletenessCol')) $('chkCompletenessCol').innerHTML = `${renderCheckIcon(cp.completeness_ok)}Kelengkapan Template`;
+
+    // Editable Final Input & Notes
+    if ($('modalConsistencyFinalInput')) {
+      $('modalConsistencyFinalInput').value = item.final_text || item.suggested_text || item.item_text || '';
+    }
+    if ($('modalConsistencyReviewNotes')) {
+      $('modalConsistencyReviewNotes').value = item.review_notes || '';
+    }
+    if ($('modalConsistencyAuditTrail')) {
+      if (item.review_timestamp && item.reviewer) {
+        const dt = new Date(item.review_timestamp).toLocaleString('id-ID');
+        $('modalConsistencyAuditTrail').textContent = `Direview: ${item.reviewer} (${dt})`;
+      } else {
+        $('modalConsistencyAuditTrail').textContent = 'Belum pernah direview';
+      }
+    }
+
+    // Show modal
+    const modalEl = $('consistencyReviewModal');
+    if (modalEl && typeof bootstrap !== 'undefined') {
+      bootstrap.Modal.getOrCreateInstance(modalEl).show();
+    }
+  }
+
+  function saveConsistencyDecision(decision) {
+    if (!state.activeConsistencyItem) return;
+    const item = state.activeConsistencyItem;
+    const currentRole = state.currentUser?.role || 'GUEST';
+
+    if (currentRole === 'VIEWER' || currentRole === 'GUEST') {
+      toast('Peran Anda tidak memiliki izin untuk menyimpan review.', 'warning');
+      return;
+    }
+
+    let finalText = '';
+    let labelDecision = '';
+    if (decision === 'APPROVED_SUGGESTION') {
+      finalText = item.suggested_text || item.item_text;
+      labelDecision = 'Saran Standar Diterima';
+    } else if (decision === 'REVISED_MANUAL') {
+      const inputVal = $('modalConsistencyFinalInput')?.value.trim();
+      if (!inputVal) {
+        toast('Deskripsi revisi manual tidak boleh kosong.', 'warning');
+        return;
+      }
+      finalText = inputVal;
+      labelDecision = 'Revisi Manual Disimpan';
+    } else if (decision === 'REJECTED_ORIGINAL') {
+      finalText = item.item_text;
+      labelDecision = 'Ditolak / Tetap Asli';
+    }
+
+    const reviewerName = state.currentUser.full_name || state.currentUser.fullName || state.currentUser.username || 'Operator';
+    const notes = $('modalConsistencyReviewNotes')?.value.trim() || '';
+    const nowIso = new Date().toISOString();
+
+    // Update item object
+    item.review_status = decision;
+    item.final_text = finalText;
+    item.review_notes = notes;
+    item.reviewer = reviewerName;
+    item.review_timestamp = nowIso;
+
+    // Persist to sessionStorage cache
+    saveConsistencyReviewToStorage(item.material_id, {
+      review_status: decision,
+      final_text: finalText,
+      review_notes: notes,
+      reviewer: reviewerName,
+      review_timestamp: nowIso
+    });
+
+    // Update UI
+    updateConsistencySummaryKPIs();
+    renderConsistencyTable();
+
+    // Close modal
+    const modalEl = $('consistencyReviewModal');
+    if (modalEl && typeof bootstrap !== 'undefined') {
+      bootstrap.Modal.getInstance(modalEl)?.hide();
+    }
+
+    toast(`Hasil review berhasil disimpan: ${labelDecision} (${item.material_id})`, 'success');
   }
 
   function renderAbbreviationModalTable() {
@@ -2049,45 +2311,65 @@
       return;
     }
 
+    const reviewedCount = (state.consistencyData || []).filter(x => (x.review_status || 'PENDING') !== 'PENDING').length;
+    const pendingCount = (state.consistencyData || []).length - reviewedCount;
+
     const wsData = [
-      ['LAPORAN AUDIT KONSISTENSI & STANDARISASI KATALOG MATERIAL (TEL SCS / NATO / MESC)'],
+      ['LAPORAN AUDIT & HASIL REVIEW KONSISTENSI KATALOG MATERIAL (SCS / NATO / MESC)'],
       ['Sistem AI Material Master Cleansing, Duplicate Review & Consistency Validator'],
       [],
-      ['Tanggal Audit:', new Date().toLocaleString('id-ID')],
+      ['Tanggal Unduh:', new Date().toLocaleString('id-ID')],
       ['Total Item Diaudit:', state.consistencySummary?.total_items || state.consistencyData.length],
       ['Skor Rata-Rata Kepatuhan:', `${state.consistencySummary?.avg_score || 0}%`],
-      ['Total Compliant:', state.consistencySummary?.compliant_count || 0],
-      ['Total Warning:', state.consistencySummary?.warning_count || 0],
-      ['Total Non-Compliant:', state.consistencySummary?.non_compliant_count || 0],
-      ['Total Typo Terdeteksi:', state.consistencySummary?.typo_count || 0],
+      ['Total Compliant (>=90%):', state.consistencySummary?.compliant_count || 0],
+      ['Total Warning (60-89%):', state.consistencySummary?.warning_count || 0],
+      ['Total Non-Compliant (<60%):', state.consistencySummary?.non_compliant_count || 0],
+      ['Total Selesai Direview:', reviewedCount],
+      ['Total Menunggu Review:', pendingCount],
       [],
       [
         'No',
         'Material ID / Code',
         'Template Code',
-        'Deskripsi Material (item text result)',
+        'Deskripsi Asli (Original Text)',
+        'Deskripsi Saran Standar Katalog (SCS)',
+        'Deskripsi Final Hasil Review',
+        'Status Review',
+        'Reviewer',
+        'Waktu Review',
+        'Catatan Review',
         'Skor Kepatuhan (%)',
-        'Status Standar',
-        'Jumlah Pelanggaran',
-        'Detail Temuan / Masalah',
-        'Rekomendasi Perbaikan Standar'
+        'Status Kepatuhan',
+        'Urutan NOUN Sesuai?',
+        'Tanda Baca Sesuai?',
+        'Singkatan Baku Sesuai?',
+        'Jumlah Isu/Pelanggaran',
+        'Detail Temuan Pelanggaran'
       ]
     ];
 
     state.consistencyData.forEach((item, idx) => {
       const issueDetails = item.issues.map(i => `[${i.type}] ${i.message}`).join(' | ');
-      const suggestionDetails = item.suggestions.map(s => `${s.field}: -> ${s.suggested}`).join(' | ');
+      const cp = item.checkpoints || {};
 
       wsData.push([
         idx + 1,
         item.material_id || '',
         item.template_code || '',
         item.item_text || '',
+        item.suggested_text || '',
+        item.final_text || item.item_text || '',
+        item.review_status || 'PENDING',
+        item.reviewer || '-',
+        item.review_timestamp ? new Date(item.review_timestamp).toLocaleString('id-ID') : '-',
+        item.review_notes || '-',
         item.score || 0,
         item.status || '',
+        cp.order_ok ? 'YA' : 'TIDAK',
+        cp.punctuation_ok ? 'YA' : 'TIDAK',
+        cp.abbreviations_ok ? 'YA' : 'TIDAK',
         item.issues.length,
-        issueDetails || 'Tidak ada masalah',
-        suggestionDetails || 'Sesuai standar'
+        issueDetails || 'Format rapi dan sesuai standar'
       ]);
     });
 
@@ -2097,11 +2379,19 @@
       { wch: 18 },
       { wch: 14 },
       { wch: 50 },
+      { wch: 50 },
+      { wch: 50 },
+      { wch: 20 },
       { wch: 18 },
-      { wch: 16 },
-      { wch: 16 },
-      { wch: 55 },
-      { wch: 45 }
+      { wch: 22 },
+      { wch: 30 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 20 },
+      { wch: 20 },
+      { wch: 20 },
+      { wch: 20 },
+      { wch: 60 }
     ];
 
     const wb = XLSX.utils.book_new();

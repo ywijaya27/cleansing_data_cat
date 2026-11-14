@@ -5513,11 +5513,17 @@ window.CATALOG_RULES = {
 /**
  * =============================================================================
  * Consistency & Compliance Engine (TEL SCS, NATO ACodP-1, MESC Aligned)
- * Memeriksa kesesuaian data material master terhadap aturan penulisan:
- * 1. Aturan Wajib Template (GEN, UNT, OEM, SPC, STR, MIS, MFG, SVC)
- * 2. Kamus Singkatan Baku (Abbreviation Table)
- * 3. Format Penulisan (UPPERCASE, Delimiter, Syntax KEY=VALUE)
- * 4. Pengecekan Placeholder Invalid ('???', '-', 'NONE' pada kolom wajib)
+ * Memeriksa kesesuaian data material master terhadap aturan kataloging:
+ * 1. Susunan / Urutan Katalog Standar:
+ *    - NOUN (Kata Benda Utama)
+ *    - MODIFIER(S) (Kata Pembatas / Tipe)
+ *    - Characteristics and Values (Karakteristik & Nilai Spesifikasi Teknis)
+ *    - Dimensions + Material + Class and/or Grade and/or Schedule
+ *    - Equipment Name + Equipment Reference Information (Model No., Drawing No., Position No., Mfr, P/N)
+ * 2. Konsistensi Penulisan Tanda Baca & Delimiter (Koma spasi ', ', KEY=VALUE, dsb.)
+ * 3. Kepatuhan Kamus Singkatan Baku (Abbreviation Table)
+ * 4. Pengecekan Typo & Karakter Anomali
+ * 5. Generator Rekomendasi "Text Saran" Terstandarisasi untuk Side-by-Side Review
  * =============================================================================
  */
 
@@ -5540,11 +5546,52 @@ window.CATALOG_RULES = {
       if (a) abvMap.set(a, f);
       if (f && f.length > 2) fullToAbvMap.set(f, a);
     });
+
+    // Tambahan singkatan esensial domain cataloguing jika belum ada di kamus
+    const coreAbvs = {
+      'STAINLESS STEEL': 'SS',
+      'CARBON STEEL': 'CS',
+      'CAST IRON': 'CI',
+      'DUCTILE IRON': 'DI',
+      'DIAMETER': 'DIA',
+      'THICKNESS': 'THK',
+      'LENGTH': 'LG',
+      'HEIGHT': 'HT',
+      'WIDTH': 'WD',
+      'PRESSURE': 'PRESS',
+      'TEMPERATURE': 'TEMP',
+      'STANDARD': 'STD',
+      'SPECIFICATION': 'SPEC',
+      'MANUFACTURER': 'MFR',
+      'MANUFACTURE': 'MFR',
+      'PART NUMBER': 'P/N',
+      'PART NO': 'P/N',
+      'MODEL NUMBER': 'MDL',
+      'MODEL NO': 'MDL',
+      'DRAWING NUMBER': 'DWG',
+      'DRAWING NO': 'DWG',
+      'POSITION NUMBER': 'POS',
+      'POSITION NO': 'POS',
+      'SCHEDULE': 'SCH',
+      'CLASS': 'CL',
+      'GRADE': 'GR',
+      'POUND': 'LB',
+      'POUNDS': 'LB',
+      'INCH': 'IN',
+      'INCHES': 'IN',
+      'FEET': 'FT',
+      'FOOT': 'FT',
+      'GALVANIZED': 'GALV',
+      'COUPLING': 'CPLG',
+      'FLANGED': 'FLG',
+      'THREADED': 'THD'
+    };
+    Object.entries(coreAbvs).forEach(([full, abv]) => {
+      if (!fullToAbvMap.has(full)) fullToAbvMap.set(full, abv);
+      if (!abvMap.has(abv)) abvMap.set(abv, full);
+    });
   }
 
-  /**
-   * Helper pembersih string
-   */
   function clean(val) {
     if (val === null || val === undefined) return '';
     return String(val).trim();
@@ -5552,13 +5599,267 @@ window.CATALOG_RULES = {
 
   function isBlankOrInvalid(val) {
     const s = clean(val).toUpperCase();
-    return !s || s === 'NONE' || s === '???' || s === '-' || s === 'NULL' || s === 'N/A';
+    return !s || s === 'NONE' || s === '???' || s === '??' || s === '-' || s === 'NULL' || s === 'N/A';
   }
 
   /**
-   * Evaluasi satu baris material
-   * @param {Object} item Objek material (dari Excel atau Database)
-   * @returns {Object} Hasil evaluasi konsistensi dan rekomendasi perbaikan
+   * Mengonversi kata atau frasa menjadi singkatan baku
+   */
+  function applyStandardAbbreviations(text) {
+    if (!text) return '';
+    initMaps();
+
+    let res = String(text).toUpperCase();
+
+    // 1. Ganti unit & tanda kutip fisik:
+    // e.g. 2" -> 2 IN, 1/2" -> 1/2 IN
+    res = res.replace(/(\d+(?:\.\d+)?|\d+\/\d+)\s*"/g, '$1 IN');
+    res = res.replace(/(\d+(?:\.\d+)?|\d+\/\d+)\s*'/g, '$1 FT');
+
+    // 2. Ganti frasa panjang lebih dulu (misal STAINLESS STEEL -> SS)
+    const sortedFullKeys = Array.from(fullToAbvMap.keys()).sort((a, b) => b.length - a.length);
+    sortedFullKeys.forEach(full => {
+      if (full.length >= 4) {
+        const regex = new RegExp(`\\b${full.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}\\b`, 'g');
+        const abv = fullToAbvMap.get(full);
+        if (abv && abv !== full) {
+          res = res.replace(regex, abv);
+        }
+      }
+    });
+
+    return res;
+  }
+
+  /**
+   * Membersihkan tanda baca dan menstandarisasi delimiter
+   */
+  function cleanPunctuationAndDelimiters(text) {
+    if (!text) return '';
+    let res = text.toUpperCase();
+
+    // Ubah titik koma atau slash ganda menjadi koma
+    res = res.replace(/;/g, ',');
+    res = res.replace(/\/{2,}/g, ',');
+
+    // Standardisasi pasangan KEY-VALUE menjadi KEY=VALUE
+    // Contoh: SIZE-2 IN -> SIZE=2 IN, DIA-50 MM -> DIA=50 MM, MAT-SS316 -> MAT=SS316
+    res = res.replace(/\b(SIZE|DIA|OD|ID|THK|LG|WD|HT|PRESS|TEMP|RATING|VOLT|AMP|KW|HP|RATIO|PITCH|MAT|SCH|CL|GR|MDL|DWG|POS|MFR|PN|P\/N)-([0-9A-Z/]+)\b/gi, '$1=$2');
+
+    // Bersihkan spasi di sekitar koma dan tanda sama dengan
+    res = res.replace(/\s*,\s*/g, ', ');
+    res = res.replace(/\s*=\s*/g, '=');
+    res = res.replace(/,\s*,/g, ',');
+    res = res.replace(/\s{2,}/g, ' ');
+    res = res.replace(/^[, ]+|[, ]+$/g, '');
+
+    return res;
+  }
+
+  /**
+   * Ekstraksi dan pengelompokan segmen sesuai 5 urutan standar katalog:
+   * 1. Noun
+   * 2. Modifier(s)
+   * 3. Characteristics & Values
+   * 4. Dimensions + Material + Class/Grade/Schedule
+   * 5. Equipment Name + Equipment Reference Info
+   */
+  function parseAndCategorizeSegments(item, rawText) {
+    initMaps();
+
+    const result = {
+      noun: '',
+      modifiers: [],
+      characteristics: [],
+      dimensions_material_class: [],
+      equipment_ref: [],
+      raw_segments: []
+    };
+
+    // Bersihkan tanda baca awal
+    const normalizedRaw = cleanPunctuationAndDelimiters(applyStandardAbbreviations(rawText));
+    const parts = normalizedRaw.split(',').map(p => p.trim()).filter(Boolean);
+    result.raw_segments = parts.slice();
+
+    // 1. Ekstrak NOUN
+    let nounCandidate = clean(item.major_name || item.noun || '').toUpperCase();
+    if (!nounCandidate && parts.length > 0) {
+      // Kata pertama dari segmen pertama
+      const seg1Words = parts[0].split(/\s+/);
+      nounCandidate = seg1Words[0] || '';
+    }
+    nounCandidate = applyStandardAbbreviations(nounCandidate);
+    result.noun = nounCandidate;
+
+    // 2. Ekstrak Modifiers dari item atau parts
+    const modCandidateSet = new Set();
+    [item.modifier1, item.modifier2, item.modifier3].forEach(m => {
+      const c = clean(m).toUpperCase();
+      if (c && !isBlankOrInvalid(c)) modCandidateSet.add(applyStandardAbbreviations(c));
+    });
+
+    // 3. Klasifikasikan sisa segmen dari parts
+    parts.forEach((seg, idx) => {
+      if (!seg) return;
+      const upperSeg = seg.toUpperCase();
+
+      // Jika segmen adalah Noun itu sendiri
+      if (idx === 0 && (upperSeg === nounCandidate || upperSeg.startsWith(nounCandidate + ' '))) {
+        const remaining = upperSeg.replace(new RegExp(`^${nounCandidate}\\s*`), '').trim();
+        if (remaining) modCandidateSet.add(remaining);
+        return;
+      }
+
+      // Cek apakah ini Equipment Name atau Equipment Reference
+      // Pattern: FOR PUMP..., MODEL..., DWG..., POS..., P/N..., MFR...
+      if (
+        /^(FOR\b|EQPT\b|EQUIPMENT\b|MDL\b|MODEL\b|DWG\b|DRAWING\b|POS\b|POSITION\b|MFR\b|MANUFACTURER\b|P\/N\b|PART\s*NO)/i.test(upperSeg) ||
+        /\b(DWG|POS|MDL|P\/N)=/i.test(upperSeg)
+      ) {
+        result.equipment_ref.push(upperSeg);
+        return;
+      }
+
+      // Cek apakah ini Dimensions, Material, atau Class/Grade/Schedule
+      // Dimensions: SIZE=..., DIA=..., OD=..., ID=..., THK=..., LG=..., 2 IN, 50 MM, dsb.
+      // Material: MAT=..., SS316, CS, BRASS, PVC, dsb.
+      // Class/Grade/Schedule: CL 150, SCH 40, GR B, dsb.
+      if (
+        /^(SIZE|DIA|OD|ID|THK|LG|WD|HT|DIM|DIMENSIONS?)=/i.test(upperSeg) ||
+        /\b(\d+(?:\.\d+)?|\d+\/\d+)\s*(IN|MM|CM|M|FT)\b/i.test(upperSeg) ||
+        /^(MAT|MATERIAL)=/i.test(upperSeg) ||
+        /\b(SS316|SS304|SS|CS|CARBON STEEL|BRASS|BRONZE|COPPER|PVC|PTFE|RUBBER|EPDM|VITON|ALUMINUM|AL|CI|DI)\b/i.test(upperSeg) ||
+        /^(CL|CLASS|SCH|SCHEDULE|GR|GRADE|RATING\s*CLASS)=/i.test(upperSeg) ||
+        /\b(CL\s*\d+|CLASS\s*\d+|SCH\s*\d+|GR\s*[A-Z0-9]+)\b/i.test(upperSeg)
+      ) {
+        result.dimensions_material_class.push(upperSeg);
+        return;
+      }
+
+      // Cek apakah ini Characteristics and Values (misal PRESS=..., TEMP=..., RATING=..., VOLT=...)
+      if (
+        /^(TYPE|RATING|PRESS|PRESSURE|TEMP|TEMPERATURE|VOLT|VOLTAGE|AMP|AMPERE|KW|HP|RPM|FLOW|PITCH|THREAD|CONN|CONNECTION|RATIO)=/i.test(upperSeg) ||
+        /\b(BAR|PSI|DEG\s*C|VAC|VDC|RPM|M3\/H|GPM|NPT|FLG|RF|FF)\b/i.test(upperSeg)
+      ) {
+        result.characteristics.push(upperSeg);
+        return;
+      }
+
+      // Jika cocok dengan salah satu modifier eksplisit
+      if (modCandidateSet.has(upperSeg)) {
+        return; // Akan ditambahkan dari modCandidateSet
+      }
+
+      // Default: jika masih berada di awal, masukkan ke modifier; jika di tengah/akhir masukkan ke characteristics
+      if (idx <= 2 && !result.characteristics.length && !result.dimensions_material_class.length) {
+        modCandidateSet.add(upperSeg);
+      } else {
+        result.characteristics.push(upperSeg);
+      }
+    });
+
+    result.modifiers = Array.from(modCandidateSet);
+
+    // Tambahan dari structured fields jika di deskripsi belum masuk
+    if (item.size && !isBlankOrInvalid(item.size)) {
+      const s = applyStandardAbbreviations(clean(item.size));
+      if (!result.dimensions_material_class.some(d => d.includes(s))) {
+        result.dimensions_material_class.unshift(s.startsWith('SIZE=') ? s : `SIZE=${s}`);
+      }
+    }
+    if (item.material && !isBlankOrInvalid(item.material)) {
+      const m = applyStandardAbbreviations(clean(item.material));
+      if (!result.dimensions_material_class.some(d => d.includes(m))) {
+        result.dimensions_material_class.push(m.startsWith('MAT=') ? m : `MAT=${m}`);
+      }
+    }
+    if (item.class && !isBlankOrInvalid(item.class)) {
+      const c = applyStandardAbbreviations(clean(item.class));
+      if (!result.dimensions_material_class.some(d => d.includes(c))) {
+        result.dimensions_material_class.push(c);
+      }
+    }
+
+    // Equipment ref dari structured fields
+    if (item.manufacture && !isBlankOrInvalid(item.manufacture)) {
+      const mfr = `MFR=${applyStandardAbbreviations(clean(item.manufacture))}`;
+      if (!result.equipment_ref.some(e => e.includes('MFR='))) result.equipment_ref.push(mfr);
+    }
+    if (item.part_no && !isBlankOrInvalid(item.part_no)) {
+      const pn = `P/N=${applyStandardAbbreviations(clean(item.part_no))}`;
+      if (!result.equipment_ref.some(e => e.includes('P/N='))) result.equipment_ref.push(pn);
+    }
+    if (item.model_no && !isBlankOrInvalid(item.model_no)) {
+      const mdl = `MDL=${applyStandardAbbreviations(clean(item.model_no))}`;
+      if (!result.equipment_ref.some(e => e.includes('MDL='))) result.equipment_ref.push(mdl);
+    }
+    if (item.dwg_no && !isBlankOrInvalid(item.dwg_no)) {
+      const dwg = `DWG=${applyStandardAbbreviations(clean(item.dwg_no))}`;
+      if (!result.equipment_ref.some(e => e.includes('DWG='))) result.equipment_ref.push(dwg);
+    }
+    if (item.pos_no && !isBlankOrInvalid(item.pos_no)) {
+      const pos = `POS=${applyStandardAbbreviations(clean(item.pos_no))}`;
+      if (!result.equipment_ref.some(e => e.includes('POS='))) result.equipment_ref.push(pos);
+    }
+
+    return result;
+  }
+
+  /**
+   * Membangun teks saran katalog standar yang terstruktur:
+   * [NOUN], [MODIFIER(S)], [CHARACTERISTICS & VALUES], [DIMENSIONS + MATERIAL + CLASS], [EQUIPMENT REF]
+   */
+  function buildSuggestedDescription(categorized, isService = false) {
+    const segments = [];
+
+    // Jika Jasa / Service
+    if (isService) {
+      segments.push('SERVICE:');
+    }
+
+    // 1. NOUN
+    if (categorized.noun) {
+      segments.push(categorized.noun);
+    }
+
+    // 2. MODIFIER(S)
+    if (categorized.modifiers && categorized.modifiers.length > 0) {
+      categorized.modifiers.forEach(m => {
+        if (m && !segments.includes(m)) segments.push(m);
+      });
+    }
+
+    // 3. CHARACTERISTICS AND VALUES
+    if (categorized.characteristics && categorized.characteristics.length > 0) {
+      categorized.characteristics.forEach(c => {
+        if (c && !segments.includes(c)) segments.push(c);
+      });
+    }
+
+    // 4. DIMENSIONS + MATERIAL + CLASS AND/OR GRADE AND/OR SCHEDULE
+    if (categorized.dimensions_material_class && categorized.dimensions_material_class.length > 0) {
+      categorized.dimensions_material_class.forEach(d => {
+        if (d && !segments.includes(d)) segments.push(d);
+      });
+    }
+
+    // 5. EQUIPMENT NAME + EQUIPMENT REFERENCE INFORMATION (MODEL/DWG/POS/MFR/PN)
+    if (categorized.equipment_ref && categorized.equipment_ref.length > 0) {
+      categorized.equipment_ref.forEach(e => {
+        if (e && !segments.includes(e)) segments.push(e);
+      });
+    }
+
+    let finalStr = segments.join(', ');
+    if (isService && finalStr.startsWith('SERVICE:, ')) {
+      finalStr = finalStr.replace('SERVICE:, ', 'SERVICE: ');
+    }
+
+    return cleanPunctuationAndDelimiters(finalStr);
+  }
+
+  /**
+   * Evaluasi satu baris material secara menyeluruh (Urutan, Tanda Baca, Singkatan, Typo, dan Pembanding)
    */
   function auditMaterialRow(item) {
     initMaps();
@@ -5569,188 +5870,100 @@ window.CATALOG_RULES = {
 
     const rawText = clean(item.item_text_result || item.item_text || item.description || '');
     const templateCode = clean(item.template_code || '').toUpperCase();
-    const noun = clean(item.major_name || item.noun || '').toUpperCase();
-    const mod1 = clean(item.modifier1 || item.modifier_1 || '').toUpperCase();
-    const mod2 = clean(item.modifier2 || item.modifier_2 || '').toUpperCase();
-    const mod3 = clean(item.modifier3 || item.modifier_3 || '').toUpperCase();
-    const mfr = clean(item.manufacture || item.manufacturer || '').toUpperCase();
-    const dwgNo = clean(item.dwg_no || item.drawing_no || '').toUpperCase();
-    const posNo = clean(item.pos_no || item.position_no || '').toUpperCase();
-    const partNo = clean(item.part_no || item.part_number || '').toUpperCase();
-    const modelNo = clean(item.model_no || '').toUpperCase();
-    const size = clean(item.size || item.dimensions || '').toUpperCase();
-    const matl = clean(item.material || '').toUpperCase();
-    const cls = clean(item.class || item.grade || '').toUpperCase();
+    const isService = templateCode.startsWith('SVC') || rawText.toUpperCase().startsWith('SERVICE:');
+
+    // 1. Parsing & Kategorisasi 5 Segmen Standar
+    const categorized = parseAndCategorizeSegments(item, rawText);
+    const suggestedText = buildSuggestedDescription(categorized, isService);
+
+    // Checkpoints status
+    const checkpoints = {
+      order_ok: true,
+      punctuation_ok: true,
+      abbreviations_ok: true,
+      completeness_ok: true
+    };
 
     // -------------------------------------------------------------------------
-    // 1. RULE: Pemeriksaan Kapitalisasi (Harus UPPERCASE)
+    // 2. RULE: Pemeriksaan Kapitalisasi (Harus UPPERCASE)
     // -------------------------------------------------------------------------
     if (rawText && rawText !== rawText.toUpperCase()) {
       score -= 5;
+      checkpoints.punctuation_ok = false;
       issues.push({
         type: 'CASING',
         severity: 'minor',
         field: 'item_text_result',
-        message: 'Deskripsi mengandung huruf kecil. Standar SCS mewajibkan SEMUA HURUF KAPITAL (UPPERCASE).'
+        message: 'Deskripsi mengandung huruf kecil. Standar katalog mewajibkan SEMUA HURUF KAPITAL (UPPERCASE).'
       });
       suggestions.push({
         field: 'item_text_result',
         suggested: rawText.toUpperCase(),
-        reason: 'Ubah ke huruf kapital'
+        reason: 'Ubah seluruh huruf menjadi kapital'
       });
     }
 
     // -------------------------------------------------------------------------
-    // 2. RULE: Template Mandatory Fields Check
+    // 3. RULE: Pemeriksaan Tanda Baca, Kutip Inch, & Delimiter
     // -------------------------------------------------------------------------
-    const tempPrefix = templateCode.split('-')[0];
-    const templateDef = (window.CATALOG_RULES?.TEMPLATES || []).find(t => t.code === tempPrefix);
-
-    if (!templateCode) {
-      score -= 20;
+    // Cek tanda kutip inch (misal 2" atau 1/2")
+    if (/(\d+(?:\.\d+)?|\d+\/\d+)\s*["']/.test(rawText)) {
+      score -= 5;
+      checkpoints.punctuation_ok = false;
       issues.push({
-        type: 'TEMPLATE_MISSING',
-        severity: 'critical',
-        field: 'template_code',
-        message: 'Kode template belum ditentukan (misal: GEN-XX, UNT-XX, OEM-XX, STR-XX).'
+        type: 'PUNCTUATION_QUOTE',
+        severity: 'minor',
+        field: 'item_text_result',
+        message: 'Penggunaan tanda kutip (" atau \') untuk satuan ukuran tidak baku. Gunakan "IN" untuk inch atau "FT" untuk feet.'
       });
-    } else if (templateDef) {
-      // Validasi kolom wajib per template
-      if (templateDef.code === 'OEM') {
-        if (isBlankOrInvalid(mfr)) {
-          score -= 15;
-          issues.push({
-            type: 'MANDATORY_MISSING',
-            severity: 'critical',
-            field: 'manufacture',
-            message: 'Template OEM wajib memiliki Manufacture/Brand spesifik.'
-          });
-        }
-        if (isBlankOrInvalid(partNo)) {
-          score -= 20;
-          issues.push({
-            type: 'MANDATORY_MISSING',
-            severity: 'critical',
-            field: 'part_no',
-            message: 'Template OEM wajib memiliki Part Number yang valid dari pabrikan.'
-          });
-        }
-        if (isBlankOrInvalid(dwgNo) && isBlankOrInvalid(modelNo)) {
-          score -= 10;
-          issues.push({
-            type: 'MANDATORY_MISSING',
-            severity: 'warning',
-            field: 'dwg_no',
-            message: 'Template OEM membutuhkan referensi alat (Drawing No atau Model No).'
-          });
-        }
-      } else if (templateDef.code === 'UNT') {
-        if (isBlankOrInvalid(mfr)) {
-          score -= 15;
-          issues.push({
-            type: 'MANDATORY_MISSING',
-            severity: 'critical',
-            field: 'manufacture',
-            message: 'Template UNIT wajib memiliki Manufacture/Brand.'
-          });
-        }
-        if (isBlankOrInvalid(partNo) && isBlankOrInvalid(modelNo)) {
-          score -= 15;
-          issues.push({
-            type: 'MANDATORY_MISSING',
-            severity: 'critical',
-            field: 'part_no',
-            message: 'Template UNIT wajib mencantumkan Model Number atau Part Number.'
-          });
-        }
-      } else if (templateDef.code === 'STR') {
-        if (isBlankOrInvalid(size)) {
-          score -= 15;
-          issues.push({
-            type: 'MANDATORY_MISSING',
-            severity: 'critical',
-            field: 'size',
-            message: 'Template Construction (STR) wajib memiliki dimensi/ukuran fisik (Size).'
-          });
-        }
-        if (isBlankOrInvalid(matl)) {
-          score -= 15;
-          issues.push({
-            type: 'MANDATORY_MISSING',
-            severity: 'critical',
-            field: 'material',
-            message: 'Template Construction (STR) wajib mencantumkan jenis material (misal SS316, SS400).'
-          });
-        }
-      } else if (templateDef.code === 'GEN') {
-        if (isBlankOrInvalid(size) && isBlankOrInvalid(rawText)) {
-          score -= 15;
-          issues.push({
-            type: 'MANDATORY_MISSING',
-            severity: 'warning',
-            field: 'size',
-            message: 'Template General (GEN) memerlukan spesifikasi/dimensi teknis.'
-          });
-        }
-      } else if (templateDef.code === 'SVC') {
-        if (!rawText.startsWith('SERVICE:')) {
-          score -= 20;
-          issues.push({
-            type: 'SYNTAX_ERROR',
-            severity: 'critical',
-            field: 'item_text_result',
-            message: 'Template Jasa (SVC) wajib diawali dengan kata "SERVICE: ".'
-          });
-        }
-      }
+    }
+
+    // Cek koma tidak beraturan (spasi sebelum koma, koma ganda, titik koma)
+    if (/;\s*|,\s*,|\s+,/.test(rawText)) {
+      score -= 5;
+      checkpoints.punctuation_ok = false;
+      issues.push({
+        type: 'PUNCTUATION_DELIMITER',
+        severity: 'minor',
+        field: 'item_text_result',
+        message: 'Penulisan tanda baca koma/titik-koma tidak rapi. Gunakan pemisah koma dan satu spasi (, ).'
+      });
+    }
+
+    // Cek delimiter KEY-VALUE yang memakai strip bukan '='
+    const dashDelimiterRegex = /\b(SIZE|DIA|OD|ID|THK|LG|WD|HT|PRESS|TEMP|RATING|VOLT|AMP|KW|HP|RATIO|PITCH|MAT|SCH|CL|GR|MDL|DWG|POS|MFR|PN|P\/N)-([0-9/])/gi;
+    if (dashDelimiterRegex.test(rawText)) {
+      score -= 5;
+      checkpoints.punctuation_ok = false;
+      issues.push({
+        type: 'SYNTAX_DELIMITER',
+        severity: 'minor',
+        field: 'item_text_result',
+        message: 'Penulisan atribut spesifikasi menggunakan tanda minus (-). Standar baku menggunakan tanda sama dengan (=), misal: SIZE=2 IN, MAT=SS316.'
+      });
     }
 
     // -------------------------------------------------------------------------
-    // 3. RULE: Pemeriksaan Karakter Anomali & Placeholder Tidak Valid ('???', '-')
+    // 4. RULE: Pemeriksaan Kepatuhan Urutan Katalog (Noun -> Modifiers -> Char -> Dim/Mat/Class -> Equip)
     // -------------------------------------------------------------------------
-    [
-      { name: 'dwg_no', val: dwgNo },
-      { name: 'pos_no', val: posNo },
-      { name: 'part_no', val: partNo },
-      { name: 'model_no', val: modelNo }
-    ].forEach(col => {
-      if (col.val.includes('???') || col.val === '??') {
-        score -= 10;
-        issues.push({
-          type: 'INVALID_PLACEHOLDER',
-          severity: 'warning',
-          field: col.name,
-          message: `Kolom ${col.name} berisi placeholder tidak valid ('${col.val}'). Gunakan 'NONE' jika tidak ada.`
-        });
-        suggestions.push({
-          field: col.name,
-          suggested: 'NONE',
-          reason: 'Standardisasi placeholder tidak valid menjadi NONE'
-        });
-      }
-    });
+    if (rawText && categorized.noun) {
+      const upperRaw = rawText.toUpperCase();
+      const firstSegment = (upperRaw.split(',')[0] || '').trim();
 
-    // -------------------------------------------------------------------------
-    // 4. RULE: Pemeriksaan Konsistensi Delimiter Dimensi (KEY=VALUE vs KEY-VALUE)
-    // -------------------------------------------------------------------------
-    if (rawText) {
-      // Deteksi pola 'CONN 2-3/8' atau sejenisnya di mana seharusnya '='
-      const dashDelimiterRegex = /\b(CONN\s*\d*|DIA|LG|THK|WA|WD|H|W|PITCH|SIZE|OD|ID)-([0-9/])/gi;
-      let match;
-      while ((match = dashDelimiterRegex.exec(rawText)) !== null) {
-        score -= 5;
-        const faultyStr = match[0];
-        const fixedStr = match[1] + '=' + match[2];
+      // Cek apakah Noun berada di segmen paling depan
+      if (!isService && !firstSegment.includes(categorized.noun)) {
+        score -= 15;
+        checkpoints.order_ok = false;
         issues.push({
-          type: 'SYNTAX_DELIMITER',
-          severity: 'minor',
+          type: 'ORDER_VIOLATION',
+          severity: 'critical',
           field: 'item_text_result',
-          message: `Penulisan atribut '${faultyStr}' tidak konsisten. Gunakan tanda sama dengan ('${fixedStr}').`
+          message: `Urutan katalog tidak sesuai standar. NOUN ('${categorized.noun}') harus berada di awal deskripsi sebelum modifier atau dimensi.`
         });
         suggestions.push({
           field: 'item_text_result',
-          suggested: rawText.replace(faultyStr, fixedStr),
-          reason: `Ubah '${faultyStr}' menjadi '${fixedStr}'`
+          suggested: suggestedText,
+          reason: 'Atur ulang urutan: NOUN, MODIFIERS, CHARACTERISTICS, DIMENSIONS/MAT/CLASS, EQUIPMENT REF'
         });
       }
     }
@@ -5758,22 +5971,19 @@ window.CATALOG_RULES = {
     // -------------------------------------------------------------------------
     // 5. RULE: Pemeriksaan Kamus Singkatan (Abbreviation Compliance)
     // -------------------------------------------------------------------------
-    // Deteksi kata lengkap yang seharusnya disingkat berdasarkan kamus
     if (rawText) {
-      const words = rawText.split(/[\s,]+/);
+      const words = rawText.toUpperCase().split(/[\s,]+/);
       for (const w of words) {
-        const upperWord = w.toUpperCase();
-        // Cek jika pengguna menulis kata panjang yang memiliki singkatan baku
-        if (fullToAbvMap.has(upperWord)) {
-          const recommendedAbv = fullToAbvMap.get(upperWord);
-          // Kecualikan kata-kata umum pendek yang ambigu
-          if (upperWord.length > 4 && recommendedAbv !== upperWord) {
+        if (fullToAbvMap.has(w)) {
+          const recAbv = fullToAbvMap.get(w);
+          if (w.length > 3 && recAbv !== w) {
             score -= 3;
+            checkpoints.abbreviations_ok = false;
             issues.push({
               type: 'ABBREVIATION_VIOLATION',
               severity: 'info',
               field: 'item_text_result',
-              message: `Kata '${upperWord}' dapat disingkat menjadi '${recommendedAbv}' sesuai kamus SCS.`
+              message: `Kata '${w}' dapat disingkat menjadi '${recAbv}' sesuai kamus standar SCS.`
             });
           }
         }
@@ -5781,7 +5991,7 @@ window.CATALOG_RULES = {
     }
 
     // -------------------------------------------------------------------------
-    // 6. RULE: Deteksi Typo Spesifik yang Teridentifikasi di Data Sampel
+    // 6. RULE: Deteksi Typo Spesifik
     // -------------------------------------------------------------------------
     const commonTypos = [
       { wrong: 'COPLING', right: 'COUPLING', field: 'major_name' },
@@ -5789,13 +5999,16 @@ window.CATALOG_RULES = {
       { wrong: 'GREATHER', right: 'GREATER', field: 'item_text_result' },
       { wrong: 'REINFORCEED', right: 'REINFORCED', field: 'item_text_result' },
       { wrong: 'ENVIRONTMENTAL', right: 'ENVIRONMENTAL', field: 'item_text_result' },
-      { wrong: 'GALVANIZE', right: 'GALV', field: 'material' }
+      { wrong: 'GALVANIZE', right: 'GALV', field: 'material' },
+      { wrong: 'BEERNG', right: 'BEARING', field: 'major_name' },
+      { wrong: 'VLVE', right: 'VALVE', field: 'major_name' }
     ];
 
     commonTypos.forEach(t => {
       const regex = new RegExp(`\\b${t.wrong}\\b`, 'i');
-      if (regex.test(rawText) || regex.test(noun) || regex.test(mod1) || regex.test(matl)) {
+      if (regex.test(rawText)) {
         score -= 8;
+        checkpoints.abbreviations_ok = false;
         issues.push({
           type: 'SPELLING_TYPO',
           severity: 'warning',
@@ -5810,6 +6023,105 @@ window.CATALOG_RULES = {
       }
     });
 
+    // -------------------------------------------------------------------------
+    // 7. RULE: Template Mandatory Fields Check
+    // -------------------------------------------------------------------------
+    const tempPrefix = templateCode.split('-')[0];
+    const templateDef = (window.CATALOG_RULES?.TEMPLATES || []).find(t => t.code === tempPrefix);
+
+    if (!templateCode) {
+      score -= 20;
+      checkpoints.completeness_ok = false;
+      issues.push({
+        type: 'TEMPLATE_MISSING',
+        severity: 'critical',
+        field: 'template_code',
+        message: 'Kode template belum ditentukan (misal: GEN-XX, UNT-XX, OEM-XX, STR-XX).'
+      });
+    } else if (templateDef) {
+      const mfr = clean(item.manufacture || item.manufacturer || '').toUpperCase();
+      const dwgNo = clean(item.dwg_no || item.drawing_no || '').toUpperCase();
+      const partNo = clean(item.part_no || item.part_number || '').toUpperCase();
+      const modelNo = clean(item.model_no || '').toUpperCase();
+      const size = clean(item.size || item.dimensions || '').toUpperCase();
+      const matl = clean(item.material || '').toUpperCase();
+
+      if (templateDef.code === 'OEM') {
+        if (isBlankOrInvalid(mfr)) {
+          score -= 15;
+          checkpoints.completeness_ok = false;
+          issues.push({
+            type: 'MANDATORY_MISSING',
+            severity: 'critical',
+            field: 'manufacture',
+            message: 'Template OEM wajib memiliki Manufacture/Brand spesifik.'
+          });
+        }
+        if (isBlankOrInvalid(partNo)) {
+          score -= 20;
+          checkpoints.completeness_ok = false;
+          issues.push({
+            type: 'MANDATORY_MISSING',
+            severity: 'critical',
+            field: 'part_no',
+            message: 'Template OEM wajib memiliki Part Number yang valid dari pabrikan.'
+          });
+        }
+        if (isBlankOrInvalid(dwgNo) && isBlankOrInvalid(modelNo)) {
+          score -= 10;
+          checkpoints.completeness_ok = false;
+          issues.push({
+            type: 'MANDATORY_MISSING',
+            severity: 'warning',
+            field: 'dwg_no',
+            message: 'Template OEM membutuhkan referensi alat (Drawing No atau Model No).'
+          });
+        }
+      } else if (templateDef.code === 'UNT') {
+        if (isBlankOrInvalid(mfr)) {
+          score -= 15;
+          checkpoints.completeness_ok = false;
+          issues.push({
+            type: 'MANDATORY_MISSING',
+            severity: 'critical',
+            field: 'manufacture',
+            message: 'Template UNIT wajib memiliki Manufacture/Brand.'
+          });
+        }
+        if (isBlankOrInvalid(partNo) && isBlankOrInvalid(modelNo)) {
+          score -= 15;
+          checkpoints.completeness_ok = false;
+          issues.push({
+            type: 'MANDATORY_MISSING',
+            severity: 'critical',
+            field: 'part_no',
+            message: 'Template UNIT wajib mencantumkan Model Number atau Part Number.'
+          });
+        }
+      } else if (templateDef.code === 'STR') {
+        if (isBlankOrInvalid(size)) {
+          score -= 15;
+          checkpoints.completeness_ok = false;
+          issues.push({
+            type: 'MANDATORY_MISSING',
+            severity: 'critical',
+            field: 'size',
+            message: 'Template Construction (STR) wajib memiliki dimensi/ukuran fisik (Size).'
+          });
+        }
+        if (isBlankOrInvalid(matl)) {
+          score -= 15;
+          checkpoints.completeness_ok = false;
+          issues.push({
+            type: 'MANDATORY_MISSING',
+            severity: 'critical',
+            field: 'material',
+            message: 'Template Construction (STR) wajib mencantumkan jenis material (misal SS316, SS400).'
+          });
+        }
+      }
+    }
+
     // Batasi skor minimum 0 dan maksimum 100
     score = Math.max(0, Math.min(100, Math.round(score)));
 
@@ -5818,14 +6130,23 @@ window.CATALOG_RULES = {
     else if (score < 90) status = 'WARNING';
 
     return {
-      material_id: item.id || item.part_no || item.major_name || '-',
+      material_id: item.material_code || item.id || '-',
+      material_code: item.material_code || item.id || '-',
       item_text: rawText,
+      suggested_text: suggestedText || rawText,
+      final_text: item.final_text || suggestedText || rawText,
       template_code: templateCode,
       score,
       status,
+      review_status: item.review_status || 'PENDING', // PENDING | APPROVED_SUGGESTION | REVISED_MANUAL | REJECTED_ORIGINAL
+      reviewed_by: item.reviewed_by || null,
+      reviewed_at: item.reviewed_at || null,
+      review_notes: item.review_notes || '',
       issue_count: issues.length,
       issues,
-      suggestions
+      suggestions,
+      segments: categorized,
+      checkpoints
     };
   }
 
@@ -5843,12 +6164,21 @@ window.CATALOG_RULES = {
     let nonCompliantCount = 0;
     let typoCount = 0;
     let mandatoryMissingCount = 0;
+    let pendingReviewCount = 0;
+    let approvedCount = 0;
+    let revisedCount = 0;
+    let rejectedCount = 0;
 
     results.forEach(res => {
       totalScore += res.score;
       if (res.status === 'COMPLIANT') compliantCount++;
       else if (res.status === 'WARNING') warningCount++;
       else nonCompliantCount++;
+
+      if (res.review_status === 'APPROVED_SUGGESTION') approvedCount++;
+      else if (res.review_status === 'REVISED_MANUAL') revisedCount++;
+      else if (res.review_status === 'REJECTED_ORIGINAL') rejectedCount++;
+      else pendingReviewCount++;
 
       res.issues.forEach(iss => {
         if (iss.type === 'SPELLING_TYPO') typoCount++;
@@ -5868,6 +6198,11 @@ window.CATALOG_RULES = {
         non_compliant_count: nonCompliantCount,
         typo_count: typoCount,
         mandatory_missing_count: mandatoryMissingCount,
+        pending_review_count: pendingReviewCount,
+        approved_count: approvedCount,
+        revised_count: revisedCount,
+        rejected_count: rejectedCount,
+        reviewed_count: (approvedCount + revisedCount + rejectedCount),
         compliance_rate: total > 0 ? Math.round((compliantCount / total) * 100) : 100
       },
       results
@@ -5877,7 +6212,11 @@ window.CATALOG_RULES = {
   // Export ke global window
   window.ConsistencyEngine = {
     auditMaterialRow,
-    auditCatalogDataset
+    auditCatalogDataset,
+    applyStandardAbbreviations,
+    cleanPunctuationAndDelimiters,
+    parseAndCategorizeSegments,
+    buildSuggestedDescription
   };
 
 })();
@@ -5917,7 +6256,8 @@ window.CATALOG_RULES = {
     accessControl: Object.assign({}, DEFAULT_GUEST_ACCESS),
     allRoles: [],
     users: [],
-    consistencyData: []
+    consistencyData: [],
+    activeConsistencyItem: null
   };
 
   const titles = {
@@ -6204,13 +6544,29 @@ window.CATALOG_RULES = {
     $('menuToggle').addEventListener('click', () => $('sidebar').classList.toggle('open'));
     $('themeToggle').addEventListener('click', toggleTheme);
 
-    // Consistency Audit Actions
+    // Consistency Audit & Review Actions
     if ($('runConsistencyAuditBtn')) $('runConsistencyAuditBtn').addEventListener('click', runConsistencyAudit);
     if ($('exportConsistencyBtn')) $('exportConsistencyBtn').addEventListener('click', exportConsistencyExcel);
     if ($('consistencyStatusFilter')) $('consistencyStatusFilter').addEventListener('change', renderConsistencyTable);
     if ($('consistencyTemplateFilter')) $('consistencyTemplateFilter').addEventListener('change', renderConsistencyTable);
+    if ($('consistencyReviewFilter')) $('consistencyReviewFilter').addEventListener('change', renderConsistencyTable);
     if ($('consistencySearchInput')) $('consistencySearchInput').addEventListener('input', debounce(renderConsistencyTable, 300));
     if ($('abvSearchInput')) $('abvSearchInput').addEventListener('input', debounce(renderAbbreviationModalTable, 250));
+
+    // Consistency Review Modal Actions
+    if ($('btnModalUseSuggested')) $('btnModalUseSuggested').addEventListener('click', () => {
+      if (state.activeConsistencyItem && $('modalConsistencyFinalInput')) {
+        $('modalConsistencyFinalInput').value = state.activeConsistencyItem.suggested_text || '';
+      }
+    });
+    if ($('btnModalUseOriginal')) $('btnModalUseOriginal').addEventListener('click', () => {
+      if (state.activeConsistencyItem && $('modalConsistencyFinalInput')) {
+        $('modalConsistencyFinalInput').value = state.activeConsistencyItem.item_text || '';
+      }
+    });
+    if ($('btnAcceptConsistencyModal')) $('btnAcceptConsistencyModal').addEventListener('click', () => saveConsistencyDecision('APPROVED_SUGGESTION'));
+    if ($('btnSaveConsistencyRevisionModal')) $('btnSaveConsistencyRevisionModal').addEventListener('click', () => saveConsistencyDecision('REVISED_MANUAL'));
+    if ($('btnRejectConsistencyModal')) $('btnRejectConsistencyModal').addEventListener('click', () => saveConsistencyDecision('REJECTED_ORIGINAL'));
 
     // Upload
     $('materialFile').addEventListener('change', handleFile);
@@ -7736,8 +8092,46 @@ window.CATALOG_RULES = {
   // MODUL CEK KONSISTENSI & STANDAR KATALOG (TEL SCS, NATO ACodP-1, MESC)
   // =============================================================================
 
+  const CONSISTENCY_STORAGE_KEY = 'matclean_consistency_reviews';
+
+  function getSavedConsistencyReviews() {
+    try {
+      return JSON.parse(sessionStorage.getItem(CONSISTENCY_STORAGE_KEY) || '{}');
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function saveConsistencyReviewToStorage(matId, reviewData) {
+    try {
+      const all = getSavedConsistencyReviews();
+      all[matId] = reviewData;
+      sessionStorage.setItem(CONSISTENCY_STORAGE_KEY, JSON.stringify(all));
+    } catch (e) {
+      console.warn('Gagal menyimpan review konsistensi ke cache:', e);
+    }
+  }
+
+  function updateConsistencySummaryKPIs() {
+    const list = state.consistencyData || [];
+    const pendingCount = list.filter(x => (x.review_status || 'PENDING') === 'PENDING').length;
+    const reviewedCount = list.length - pendingCount;
+
+    if ($('kpiReviewPendingCount')) $('kpiReviewPendingCount').textContent = fmt(pendingCount);
+    if ($('kpiReviewedCount')) $('kpiReviewedCount').textContent = fmt(reviewedCount);
+
+    if (state.consistencySummary) {
+      if ($('kpiConsistencyScore')) $('kpiConsistencyScore').textContent = `${state.consistencySummary.avg_score}%`;
+      if ($('kpiCompliantCount')) $('kpiCompliantCount').textContent = fmt(state.consistencySummary.compliant_count);
+      if ($('kpiWarningCount')) $('kpiWarningCount').textContent = fmt(state.consistencySummary.warning_count);
+      if ($('kpiNonCompliantCount')) $('kpiNonCompliantCount').textContent = fmt(state.consistencySummary.non_compliant_count);
+      if ($('kpiTypoCount')) $('kpiTypoCount').textContent = fmt(state.consistencySummary.typo_count);
+    }
+  }
+
   function loadConsistencyView() {
     renderAbbreviationModalTable();
+    updateConsistencySummaryKPIs();
     renderConsistencyTable();
   }
 
@@ -7749,7 +8143,7 @@ window.CATALOG_RULES = {
     }
 
     try {
-      showLoading(true, 'Mengambil data katalog & menjalankan audit konsistensi...');
+      showLoading(true, 'Mengambil data katalog & menjalankan audit konsistensi standar...');
 
       // Fetch every page; the server caps each response at 100 records.
       state.consistencyData = [];
@@ -7774,7 +8168,6 @@ window.CATALOG_RULES = {
       // Format row agar field sesuai standar engine (noun, modifiers, template, etc.)
       const normalizedRows = rawRows.map(row => {
         const desc = (row.material_description || row.item_text_result || '').trim();
-        // Coba ekstrak noun dari kata pertama sebelum koma jika belum ada
         const firstSegment = desc.split(',')[0] || '';
         return {
           id: row.id || row.material_code,
@@ -7798,15 +8191,25 @@ window.CATALOG_RULES = {
 
       const auditResult = window.ConsistencyEngine.auditCatalogDataset(normalizedRows);
       state.consistencySummary = auditResult.summary;
-      state.consistencyData = auditResult.results;
 
-      // Update KPI Cards
-      if ($('kpiConsistencyScore')) $('kpiConsistencyScore').textContent = `${auditResult.summary.avg_score}%`;
-      if ($('kpiCompliantCount')) $('kpiCompliantCount').textContent = fmt(auditResult.summary.compliant_count);
-      if ($('kpiWarningCount')) $('kpiWarningCount').textContent = fmt(auditResult.summary.warning_count);
-      if ($('kpiNonCompliantCount')) $('kpiNonCompliantCount').textContent = fmt(auditResult.summary.non_compliant_count);
-      if ($('kpiTypoCount')) $('kpiTypoCount').textContent = fmt(auditResult.summary.typo_count);
+      // Merge dengan keputusan review yang tersimpan di storage
+      const savedReviews = getSavedConsistencyReviews();
+      state.consistencyData = auditResult.results.map(item => {
+        const saved = savedReviews[item.material_id];
+        if (saved) {
+          return {
+            ...item,
+            review_status: saved.review_status || item.review_status,
+            final_text: saved.final_text || item.suggested_text,
+            review_notes: saved.review_notes || '',
+            reviewer: saved.reviewer || null,
+            review_timestamp: saved.review_timestamp || null
+          };
+        }
+        return item;
+      });
 
+      updateConsistencySummaryKPIs();
       renderConsistencyTable();
       toast(`Audit konsistensi selesai. Tingkat kepatuhan: ${auditResult.summary.compliance_rate}%`, 'success');
     } catch (e) {
@@ -7822,6 +8225,7 @@ window.CATALOG_RULES = {
 
     const statusFilter = $('consistencyStatusFilter')?.value || 'ALL';
     const tempFilter = $('consistencyTemplateFilter')?.value || 'ALL';
+    const reviewFilter = $('consistencyReviewFilter')?.value || 'ALL';
     const search = ($('consistencySearchInput')?.value || '').trim().toLowerCase();
 
     let list = state.consistencyData || [];
@@ -7832,12 +8236,16 @@ window.CATALOG_RULES = {
     if (tempFilter !== 'ALL') {
       list = list.filter(x => (x.template_code || '').startsWith(tempFilter));
     }
+    if (reviewFilter !== 'ALL') {
+      list = list.filter(x => (x.review_status || 'PENDING') === reviewFilter);
+    }
     if (search) {
       list = list.filter(x => {
         const text = (x.item_text || '').toLowerCase();
+        const sugg = (x.suggested_text || '').toLowerCase();
         const code = String(x.material_id || '').toLowerCase();
         const temp = (x.template_code || '').toLowerCase();
-        return text.includes(search) || code.includes(search) || temp.includes(search);
+        return text.includes(search) || sugg.includes(search) || code.includes(search) || temp.includes(search);
       });
     }
 
@@ -7846,52 +8254,245 @@ window.CATALOG_RULES = {
     }
 
     if (!list.length) {
-      tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted p-4">Tidak ada data material yang sesuai filter.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted p-4">Tidak ada data material yang sesuai filter.</td></tr>';
       return;
     }
 
     tbody.innerHTML = list.map((item, idx) => {
-      const statusBadge = item.status === 'COMPLIANT' ? 'bg-success' :
-                          item.status === 'WARNING' ? 'bg-warning text-dark' : 'bg-danger';
-
       const scoreClass = item.score >= 90 ? 'score-high' : item.score >= 60 ? 'score-mid' : 'score-low';
 
-      // Format issues list
-      const issuesHtml = item.issues.length ? item.issues.map(iss => {
-        const icon = iss.severity === 'critical' ? 'bi-x-circle-fill text-danger' :
-                     iss.severity === 'warning' ? 'bi-exclamation-triangle-fill text-warning' : 'bi-info-circle-fill text-info';
-        return `
-          <div class="mb-1 small">
-            <i class="bi ${icon} me-1"></i>
-            <span class="fw-semibold">${escapeHtml(iss.type)}:</span> ${escapeHtml(iss.message)}
-          </div>
-        `;
-      }).join('') : '<span class="text-success small"><i class="bi bi-check-circle-fill me-1"></i>Format & atribut konsisten sesuai standar.</span>';
+      let statusBadge = '<span class="badge bg-secondary"><i class="bi bi-hourglass-split me-1"></i>Pending</span>';
+      if (item.review_status === 'APPROVED_SUGGESTION') {
+        statusBadge = '<span class="badge bg-success"><i class="bi bi-check2-circle me-1"></i>Saran Diterima</span>';
+      } else if (item.review_status === 'REVISED_MANUAL') {
+        statusBadge = '<span class="badge bg-primary"><i class="bi bi-pencil-fill me-1"></i>Revisi Manual</span>';
+      } else if (item.review_status === 'REJECTED_ORIGINAL') {
+        statusBadge = '<span class="badge bg-danger"><i class="bi bi-x-circle me-1"></i>Tetap Asli</span>';
+      }
 
       return `
         <tr>
           <td>${idx + 1}</td>
           <td>
-            <span class="badge bg-secondary">${escapeHtml(item.template_code || 'GEN')}</span>
+            <strong class="font-monospace">${escapeHtml(item.material_id)}</strong>
+            <div class="mt-1"><span class="badge bg-secondary">${escapeHtml(item.template_code || 'GEN')}</span></div>
           </td>
           <td>
-            <strong>${escapeHtml(item.material_id)}</strong>
-            <div class="small text-muted mt-1 font-monospace" style="word-break: break-all;">${escapeHtml(item.item_text)}</div>
+            <div class="font-monospace small text-wrap text-break" style="max-width: 320px;">${escapeHtml(item.item_text)}</div>
+            ${item.issues.length ? `<span class="badge bg-light text-danger border border-danger mt-1"><i class="bi bi-exclamation-circle me-1"></i>${item.issues.length} isu</span>` : '<span class="badge bg-light text-success border border-success mt-1"><i class="bi bi-check me-1"></i>Format rapi</span>'}
+          </td>
+          <td>
+            <div class="font-monospace small text-wrap text-break text-accent fw-semibold" style="max-width: 340px;">${escapeHtml(item.suggested_text)}</div>
+            ${item.final_text && item.final_text !== item.suggested_text && item.review_status !== 'PENDING' ? `<div class="small text-muted mt-1 fst-italic">Final: ${escapeHtml(item.final_text)}</div>` : ''}
           </td>
           <td>
             <span class="badge-score ${scoreClass}">${item.score}%</span>
           </td>
           <td>
-            <span class="badge ${statusBadge}">${item.status}</span>
+            ${statusBadge}
           </td>
           <td>
-            <div style="max-height: 120px; overflow-y: auto;">
-              ${issuesHtml}
-            </div>
+            <button type="button" class="btn btn-sm btn-outline-primary btn-review-consistency" data-matid="${escapeHtml(item.material_id)}" title="Buka Review Pembanding & Validasi">
+              <i class="bi bi-pencil-square me-1"></i>Review
+            </button>
           </td>
         </tr>
       `;
     }).join('');
+
+    // Bind event tombol review
+    tbody.querySelectorAll('.btn-review-consistency').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const matId = btn.dataset.matid;
+        const target = state.consistencyData.find(x => String(x.material_id) === String(matId));
+        if (target) openConsistencyReviewModal(target);
+      });
+    });
+  }
+
+  function openConsistencyReviewModal(item) {
+    if (!item) return;
+    state.activeConsistencyItem = item;
+
+    // Header info
+    if ($('modalConsistencyMatCode')) $('modalConsistencyMatCode').textContent = item.material_id;
+    if ($('modalConsistencyTemplateBadge')) $('modalConsistencyTemplateBadge').textContent = item.template_code || 'GEN';
+
+    // Status Badge
+    if ($('modalConsistencyReviewBadge')) {
+      const st = item.review_status || 'PENDING';
+      let badgeHtml = '<span class="badge bg-secondary"><i class="bi bi-hourglass-split me-1"></i>MENUNGGU REVIEW</span>';
+      if (st === 'APPROVED_SUGGESTION') {
+        badgeHtml = '<span class="badge bg-success"><i class="bi bi-check2-circle me-1"></i>SARAN DITERIMA</span>';
+      } else if (st === 'REVISED_MANUAL') {
+        badgeHtml = '<span class="badge bg-primary"><i class="bi bi-pencil-fill me-1"></i>DIREVISI MANUAL</span>';
+      } else if (st === 'REJECTED_ORIGINAL') {
+        badgeHtml = '<span class="badge bg-danger"><i class="bi bi-x-circle me-1"></i>TETAP ASLI</span>';
+      }
+      $('modalConsistencyReviewBadge').innerHTML = badgeHtml;
+    }
+
+    // Score Badge
+    if ($('modalConsistencyScoreBadge')) {
+      const sc = item.score || 0;
+      const cls = sc >= 90 ? 'score-high' : sc >= 60 ? 'score-mid' : 'score-low';
+      $('modalConsistencyScoreBadge').className = `badge-score ${cls}`;
+      $('modalConsistencyScoreBadge').textContent = `${sc}% Kepatuhan`;
+    }
+
+    // Left Card: Original Text & Issues
+    if ($('modalConsistencyOriginalText')) {
+      $('modalConsistencyOriginalText').textContent = item.item_text || '-';
+    }
+    if ($('modalConsistencyIssuesContainer')) {
+      if (!item.issues || !item.issues.length) {
+        $('modalConsistencyIssuesContainer').innerHTML = `
+          <div class="text-success p-2">
+            <i class="bi bi-check-circle-fill me-1"></i>Penulisan dan susunan tanda baca/singkatan sesuai standar.
+          </div>
+        `;
+      } else {
+        $('modalConsistencyIssuesContainer').innerHTML = item.issues.map(iss => {
+          const icon = iss.severity === 'critical' ? 'bi-x-circle-fill text-danger' :
+                       iss.severity === 'warning' ? 'bi-exclamation-triangle-fill text-warning' : 'bi-info-circle-fill text-info';
+          return `
+            <div class="mb-2 p-1 border-bottom border-secondary border-opacity-25">
+              <i class="bi ${icon} me-1"></i>
+              <strong class="text-uppercase small">${escapeHtml(iss.type)}:</strong>
+              <div class="ms-3 text-muted">${escapeHtml(iss.message)}</div>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+
+    // Right Card: Suggested Standard Text & 5-Segment Breakdown
+    if ($('modalConsistencySuggestedText')) {
+      $('modalConsistencySuggestedText').textContent = item.suggested_text || '-';
+    }
+    if ($('modalConsistencySegmentsContainer')) {
+      const seg = item.segments || {};
+      const formatSegmentList = list => {
+        if (!list || !list.length) return '<span class="text-muted fst-italic">Tidak ditemukan</span>';
+        return list.map(x => typeof x === 'string' ? escapeHtml(x) : escapeHtml(x.raw || x.value || '')).join(', ');
+      };
+
+      $('modalConsistencySegmentsContainer').innerHTML = `
+        <div class="d-flex flex-column gap-2">
+          <div class="p-2 rounded border border-secondary border-opacity-25" style="background: var(--surface);">
+            <div class="small fw-bold text-accent"><i class="bi bi-1-circle-fill me-1"></i>NOUN:</div>
+            <div class="font-monospace small ms-3">${escapeHtml(seg.noun || '-')}</div>
+          </div>
+          <div class="p-2 rounded border border-secondary border-opacity-25" style="background: var(--surface);">
+            <div class="small fw-bold text-info"><i class="bi bi-2-circle-fill me-1"></i>MODIFIER(S):</div>
+            <div class="font-monospace small ms-3">${escapeHtml((seg.modifiers || []).join(', ') || '-')}</div>
+          </div>
+          <div class="p-2 rounded border border-secondary border-opacity-25" style="background: var(--surface);">
+            <div class="small fw-bold text-primary"><i class="bi bi-3-circle-fill me-1"></i>Characteristics and Values:</div>
+            <div class="font-monospace small ms-3">${formatSegmentList(seg.characteristics)}</div>
+          </div>
+          <div class="p-2 rounded border border-secondary border-opacity-25" style="background: var(--surface);">
+            <div class="small fw-bold text-warning"><i class="bi bi-4-circle-fill me-1"></i>Dimensions + Material + Class/Grade/Schedule:</div>
+            <div class="font-monospace small ms-3">${formatSegmentList(seg.dimensions_material)}</div>
+          </div>
+          <div class="p-2 rounded border border-secondary border-opacity-25" style="background: var(--surface);">
+            <div class="small fw-bold text-secondary"><i class="bi bi-5-circle-fill me-1"></i>Equipment Name + Ref (Model/Dwg/Pos):</div>
+            <div class="font-monospace small ms-3">${formatSegmentList(seg.equipment_ref)}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    // Checkpoints Checklist
+    const cp = item.checkpoints || { order_ok: true, punctuation_ok: true, abbreviations_ok: true, completeness_ok: true };
+    const renderCheckIcon = ok => ok ? '<i class="bi bi-check-circle-fill text-success me-1"></i>' : '<i class="bi bi-x-circle-fill text-danger me-1"></i>';
+    if ($('chkOrderCol')) $('chkOrderCol').innerHTML = `${renderCheckIcon(cp.order_ok)}Urutan NOUN &amp; Modifier`;
+    if ($('chkPunctCol')) $('chkPunctCol').innerHTML = `${renderCheckIcon(cp.punctuation_ok)}Tanda Baca &amp; Delimiter`;
+    if ($('chkAbbrCol')) $('chkAbbrCol').innerHTML = `${renderCheckIcon(cp.abbreviations_ok)}Singkatan Baku Kamus`;
+    if ($('chkCompletenessCol')) $('chkCompletenessCol').innerHTML = `${renderCheckIcon(cp.completeness_ok)}Kelengkapan Template`;
+
+    // Editable Final Input & Notes
+    if ($('modalConsistencyFinalInput')) {
+      $('modalConsistencyFinalInput').value = item.final_text || item.suggested_text || item.item_text || '';
+    }
+    if ($('modalConsistencyReviewNotes')) {
+      $('modalConsistencyReviewNotes').value = item.review_notes || '';
+    }
+    if ($('modalConsistencyAuditTrail')) {
+      if (item.review_timestamp && item.reviewer) {
+        const dt = new Date(item.review_timestamp).toLocaleString('id-ID');
+        $('modalConsistencyAuditTrail').textContent = `Direview: ${item.reviewer} (${dt})`;
+      } else {
+        $('modalConsistencyAuditTrail').textContent = 'Belum pernah direview';
+      }
+    }
+
+    // Show modal
+    const modalEl = $('consistencyReviewModal');
+    if (modalEl && typeof bootstrap !== 'undefined') {
+      bootstrap.Modal.getOrCreateInstance(modalEl).show();
+    }
+  }
+
+  function saveConsistencyDecision(decision) {
+    if (!state.activeConsistencyItem) return;
+    const item = state.activeConsistencyItem;
+    const currentRole = state.currentUser?.role || 'GUEST';
+
+    if (currentRole === 'VIEWER' || currentRole === 'GUEST') {
+      toast('Peran Anda tidak memiliki izin untuk menyimpan review.', 'warning');
+      return;
+    }
+
+    let finalText = '';
+    let labelDecision = '';
+    if (decision === 'APPROVED_SUGGESTION') {
+      finalText = item.suggested_text || item.item_text;
+      labelDecision = 'Saran Standar Diterima';
+    } else if (decision === 'REVISED_MANUAL') {
+      const inputVal = $('modalConsistencyFinalInput')?.value.trim();
+      if (!inputVal) {
+        toast('Deskripsi revisi manual tidak boleh kosong.', 'warning');
+        return;
+      }
+      finalText = inputVal;
+      labelDecision = 'Revisi Manual Disimpan';
+    } else if (decision === 'REJECTED_ORIGINAL') {
+      finalText = item.item_text;
+      labelDecision = 'Ditolak / Tetap Asli';
+    }
+
+    const reviewerName = state.currentUser.full_name || state.currentUser.fullName || state.currentUser.username || 'Operator';
+    const notes = $('modalConsistencyReviewNotes')?.value.trim() || '';
+    const nowIso = new Date().toISOString();
+
+    // Update item object
+    item.review_status = decision;
+    item.final_text = finalText;
+    item.review_notes = notes;
+    item.reviewer = reviewerName;
+    item.review_timestamp = nowIso;
+
+    // Persist to sessionStorage cache
+    saveConsistencyReviewToStorage(item.material_id, {
+      review_status: decision,
+      final_text: finalText,
+      review_notes: notes,
+      reviewer: reviewerName,
+      review_timestamp: nowIso
+    });
+
+    // Update UI
+    updateConsistencySummaryKPIs();
+    renderConsistencyTable();
+
+    // Close modal
+    const modalEl = $('consistencyReviewModal');
+    if (modalEl && typeof bootstrap !== 'undefined') {
+      bootstrap.Modal.getInstance(modalEl)?.hide();
+    }
+
+    toast(`Hasil review berhasil disimpan: ${labelDecision} (${item.material_id})`, 'success');
   }
 
   function renderAbbreviationModalTable() {
@@ -7934,45 +8535,65 @@ window.CATALOG_RULES = {
       return;
     }
 
+    const reviewedCount = (state.consistencyData || []).filter(x => (x.review_status || 'PENDING') !== 'PENDING').length;
+    const pendingCount = (state.consistencyData || []).length - reviewedCount;
+
     const wsData = [
-      ['LAPORAN AUDIT KONSISTENSI & STANDARISASI KATALOG MATERIAL (TEL SCS / NATO / MESC)'],
+      ['LAPORAN AUDIT & HASIL REVIEW KONSISTENSI KATALOG MATERIAL (SCS / NATO / MESC)'],
       ['Sistem AI Material Master Cleansing, Duplicate Review & Consistency Validator'],
       [],
-      ['Tanggal Audit:', new Date().toLocaleString('id-ID')],
+      ['Tanggal Unduh:', new Date().toLocaleString('id-ID')],
       ['Total Item Diaudit:', state.consistencySummary?.total_items || state.consistencyData.length],
       ['Skor Rata-Rata Kepatuhan:', `${state.consistencySummary?.avg_score || 0}%`],
-      ['Total Compliant:', state.consistencySummary?.compliant_count || 0],
-      ['Total Warning:', state.consistencySummary?.warning_count || 0],
-      ['Total Non-Compliant:', state.consistencySummary?.non_compliant_count || 0],
-      ['Total Typo Terdeteksi:', state.consistencySummary?.typo_count || 0],
+      ['Total Compliant (>=90%):', state.consistencySummary?.compliant_count || 0],
+      ['Total Warning (60-89%):', state.consistencySummary?.warning_count || 0],
+      ['Total Non-Compliant (<60%):', state.consistencySummary?.non_compliant_count || 0],
+      ['Total Selesai Direview:', reviewedCount],
+      ['Total Menunggu Review:', pendingCount],
       [],
       [
         'No',
         'Material ID / Code',
         'Template Code',
-        'Deskripsi Material (item text result)',
+        'Deskripsi Asli (Original Text)',
+        'Deskripsi Saran Standar Katalog (SCS)',
+        'Deskripsi Final Hasil Review',
+        'Status Review',
+        'Reviewer',
+        'Waktu Review',
+        'Catatan Review',
         'Skor Kepatuhan (%)',
-        'Status Standar',
-        'Jumlah Pelanggaran',
-        'Detail Temuan / Masalah',
-        'Rekomendasi Perbaikan Standar'
+        'Status Kepatuhan',
+        'Urutan NOUN Sesuai?',
+        'Tanda Baca Sesuai?',
+        'Singkatan Baku Sesuai?',
+        'Jumlah Isu/Pelanggaran',
+        'Detail Temuan Pelanggaran'
       ]
     ];
 
     state.consistencyData.forEach((item, idx) => {
       const issueDetails = item.issues.map(i => `[${i.type}] ${i.message}`).join(' | ');
-      const suggestionDetails = item.suggestions.map(s => `${s.field}: -> ${s.suggested}`).join(' | ');
+      const cp = item.checkpoints || {};
 
       wsData.push([
         idx + 1,
         item.material_id || '',
         item.template_code || '',
         item.item_text || '',
+        item.suggested_text || '',
+        item.final_text || item.item_text || '',
+        item.review_status || 'PENDING',
+        item.reviewer || '-',
+        item.review_timestamp ? new Date(item.review_timestamp).toLocaleString('id-ID') : '-',
+        item.review_notes || '-',
         item.score || 0,
         item.status || '',
+        cp.order_ok ? 'YA' : 'TIDAK',
+        cp.punctuation_ok ? 'YA' : 'TIDAK',
+        cp.abbreviations_ok ? 'YA' : 'TIDAK',
         item.issues.length,
-        issueDetails || 'Tidak ada masalah',
-        suggestionDetails || 'Sesuai standar'
+        issueDetails || 'Format rapi dan sesuai standar'
       ]);
     });
 
@@ -7982,11 +8603,19 @@ window.CATALOG_RULES = {
       { wch: 18 },
       { wch: 14 },
       { wch: 50 },
+      { wch: 50 },
+      { wch: 50 },
+      { wch: 20 },
       { wch: 18 },
-      { wch: 16 },
-      { wch: 16 },
-      { wch: 55 },
-      { wch: 45 }
+      { wch: 22 },
+      { wch: 30 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 20 },
+      { wch: 20 },
+      { wch: 20 },
+      { wch: 20 },
+      { wch: 60 }
     ];
 
     const wb = XLSX.utils.book_new();
