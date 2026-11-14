@@ -137,6 +137,7 @@ CREATE OR REPLACE FUNCTION public.run_material_cleansing_ai(
 )
 RETURNS JSONB 
 SET statement_timeout = '120s'
+SET lock_timeout = '30s'
 AS $$
 DECLARE
     v_total_materials INT;
@@ -145,8 +146,9 @@ DECLARE
     v_clusters_count INT := 0;
     v_total_potential_savings NUMERIC := 0;
 BEGIN
-    -- Tingkatkan batas waktu eksekusi lokal hingga 120 detik
+    -- Tingkatkan batas waktu eksekusi lokal dan toleransi lock timeout
     PERFORM set_config('statement_timeout', '120000', true);
+    PERFORM set_config('lock_timeout', '30000', true);
 
     SELECT COUNT(*) INTO v_total_materials FROM public.material_raw;
     IF v_total_materials < 2 THEN
@@ -156,9 +158,9 @@ BEGIN
         );
     END IF;
 
-    -- Bersihkan hasil lama
-    TRUNCATE TABLE public.duplicate_analysis;
-    TRUNCATE TABLE public.similar_material;
+    -- Bersihkan hasil lama dengan DELETE aman (Menghindari ACCESS EXCLUSIVE lock dari TRUNCATE yang memicu lock timeout)
+    DELETE FROM public.duplicate_analysis WHERE true;
+    DELETE FROM public.similar_material WHERE true;
 
     -- LANGKAH 1: Buat Temp Table dengan Pra-Kalkulasi Token & Normalisasi
     DROP TABLE IF EXISTS temp_mat_prep;
