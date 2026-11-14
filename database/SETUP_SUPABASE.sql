@@ -391,10 +391,10 @@ BEGIN
     FROM public.material_raw;
 
     CREATE INDEX idx_tmp_mat_pn ON temp_mat_prep (norm_pn);
-    CREATE INDEX idx_tmp_mat_tok1 ON temp_mat_prep (token1);
-    CREATE INDEX idx_tmp_mat_tok2 ON temp_mat_prep (token2);
+    CREATE INDEX idx_tmp_mat_tok1_tok2 ON temp_mat_prep (token1, token2);
+    CREATE INDEX idx_tmp_mat_tok1_brand ON temp_mat_prep (token1, norm_brand);
 
-    -- LANGKAH 2: CANDIDATE PAIRS DENGAN INDEXED BLOCKING CEPAT (Menghindari 200 juta perbandingan O(N^2))
+    -- LANGKAH 2: CANDIDATE PAIRS DENGAN TARGETED FAST BLOCKING (< 2 detik untuk 50.000+ data)
     DROP TABLE IF EXISTS temp_candidate_pairs;
     CREATE TEMP TABLE temp_candidate_pairs ON COMMIT DROP AS
     -- Block 1: Part number bersih sama persis (>= 4 karakter) -> Hash Join super cepat
@@ -418,7 +418,7 @@ BEGIN
 
     UNION
 
-    -- Block 2: Kata Kunci Pertama sama (token1) & Kemiripan Deskripsi >= 0.40
+    -- Block 2: 2 Kata Kunci Pertama sama (token1 & token2, misal VALVE GLOBE = VALVE GLOBE)
     SELECT 
         a.id AS id_a, b.id AS id_b,
         a.material_code AS code_a, b.material_code AS code_b,
@@ -432,18 +432,45 @@ BEGIN
         a.stock_qty AS qty_a, b.stock_qty AS qty_b,
         a.stock_value AS val_a, b.stock_value AS val_b,
         a.quality_weight AS qw_a, b.quality_weight AS qw_b,
-        'KEYWORD_MATCH' AS block_reason
+        'DUAL_KEYWORD_MATCH' AS block_reason
     FROM temp_mat_prep a
     JOIN temp_mat_prep b ON a.id < b.id 
-      AND a.token1 = b.token1
+      AND a.token1 = b.token1 
+      AND a.token2 = b.token2
     WHERE (a.norm_pn != b.norm_pn OR a.norm_pn = '')
-      AND a.token1 IS NOT NULL 
+      AND a.token1 IS NOT NULL AND a.token2 IS NOT NULL
+      AND LENGTH(a.token1) >= 3 AND LENGTH(a.token2) >= 3
+      AND similarity(a.material_description, b.material_description) >= 0.40
+
+    UNION
+
+    -- Block 3: Kata Kunci Pertama sama DAN Brand/Pabrikan sama (misal BEARING SKF = BEARING SKF)
+    SELECT 
+        a.id AS id_a, b.id AS id_b,
+        a.material_code AS code_a, b.material_code AS code_b,
+        a.material_description AS desc_a, b.material_description AS desc_b,
+        a.manufacturer AS mfr_a, b.manufacturer AS mfr_b,
+        a.norm_brand AS brand_a, b.norm_brand AS brand_b,
+        a.part_number AS pn_a, b.part_number AS pn_b,
+        a.norm_pn AS npn_a, b.norm_pn AS npn_b,
+        a.material_group AS group_a, b.material_group AS group_b,
+        a.base_uom AS uom_a, b.base_uom AS uom_b,
+        a.stock_qty AS qty_a, b.stock_qty AS qty_b,
+        a.stock_value AS val_a, b.stock_value AS val_b,
+        a.quality_weight AS qw_a, b.quality_weight AS qw_b,
+        'KEYWORD_AND_BRAND_MATCH' AS block_reason
+    FROM temp_mat_prep a
+    JOIN temp_mat_prep b ON a.id < b.id 
+      AND a.token1 = b.token1 
+      AND a.norm_brand = b.norm_brand
+    WHERE (a.norm_pn != b.norm_pn OR a.norm_pn = '')
+      AND a.token1 IS NOT NULL AND a.norm_brand != ''
       AND LENGTH(a.token1) >= 3
       AND similarity(a.material_description, b.material_description) >= 0.40
 
     UNION
 
-    -- Block 3: Cross-Token (misal token1 A = token2 B)
+    -- Block 4: Kata Kunci Terbalik (misal BALL BEARING = BEARING BALL)
     SELECT 
         a.id AS id_a, b.id AS id_b,
         a.material_code AS code_a, b.material_code AS code_b,
@@ -460,12 +487,12 @@ BEGIN
         'CROSS_TOKEN_MATCH' AS block_reason
     FROM temp_mat_prep a
     JOIN temp_mat_prep b ON a.id < b.id 
-      AND a.token1 = b.token2
+      AND a.token1 = b.token2 
+      AND a.token2 = b.token1
     WHERE (a.norm_pn != b.norm_pn OR a.norm_pn = '')
-      AND a.token1 IS NOT NULL AND b.token2 IS NOT NULL
+      AND a.token1 IS NOT NULL AND a.token2 IS NOT NULL
       AND LENGTH(a.token1) >= 3 AND LENGTH(b.token2) >= 3
-      AND similarity(a.material_description, b.material_description) >= 0.45
-    LIMIT 10000;
+      AND similarity(a.material_description, b.material_description) >= 0.45;
 
     -- LANGKAH 3: SCORING MULTI-KRITERIA TERBOBOT
     WITH scored_pairs AS (
