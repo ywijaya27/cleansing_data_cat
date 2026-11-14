@@ -178,7 +178,7 @@
     ['logoutBtn', 'sidebarLogoutBtn'].forEach(id => { if ($(id)) $(id).classList.toggle('d-none', !loggedIn); });
     updateReportUserMeta();
     const actions = {
-      uploadBtn: ['uploadMaterials'], runAiAnalysisBtn: ['runAICleansingAnalysis'],
+      uploadBtn: ['uploadMaterials'], runAiAnalysisBtn: ['runAICleansingAnalysis'], runAiAnalysisBtnSim: ['runAICleansingAnalysis'],
       btnMergeDuplicate: ['saveDuplicateDecision', ['', 'MERGE_AND_OBSOLETE']],
       btnConfirmDuplicate: ['saveDuplicateDecision', ['', 'APPROVED_DUPLICATE']],
       btnRejectDuplicate: ['saveDuplicateDecision', ['', 'REJECTED_DIFFERENT']],
@@ -495,6 +495,7 @@
 
     // AI Engine Trigger
     if ($('runAiAnalysisBtn')) $('runAiAnalysisBtn').addEventListener('click', handleRunAiAnalysis);
+    if ($('runAiAnalysisBtnSim')) $('runAiAnalysisBtnSim').addEventListener('click', handleRunAiAnalysis);
 
     // Filter Duplicate
     if ($('dupScoreFilter')) $('dupScoreFilter').addEventListener('change', renderDuplicatesTable);
@@ -503,6 +504,7 @@
 
     // Filter Similarity
     if ($('simTypeFilter')) $('simTypeFilter').addEventListener('change', renderSimilarityTable);
+    if ($('simSearchInput')) $('simSearchInput').addEventListener('input', debounce(renderSimilarityTable, 300));
 
     // Laporan Efisiensi Actions
     if ($('openReportSectionBtn')) $('openReportSectionBtn').addEventListener('click', () => navigateTo('reports'));
@@ -1144,7 +1146,14 @@
     if (!tbody) return;
 
     if (!filtered.length) {
-      tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted p-4">Tidak ada data kandidat duplikasi yang sesuai filter. Klik "Jalankan Analisis AI" untuk memulai deteksi.</td></tr>';
+      if (!state.duplicates.length) {
+        tbody.innerHTML = `<tr><td colspan="8" class="text-center text-muted p-4">
+          <i class="bi bi-intersect fs-3 d-block mb-2 text-secondary"></i>
+          Belum ada data kandidat duplikasi. Pastikan data material sudah diunggah, lalu klik <strong>"Jalankan Analisis AI"</strong> di atas untuk memulai deteksi.
+        </td></tr>`;
+      } else {
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted p-4">Tidak ada data kandidat duplikasi yang sesuai filter. Coba ubah filter skor atau status review di atas.</td></tr>';
+      }
       return;
     }
 
@@ -1304,12 +1313,32 @@
 
   function renderSimilarityTable() {
     const filterType = $('simTypeFilter')?.value || 'ALL';
-    const rows = state.similarities.filter(x => filterType === 'ALL' || x.similarity_type === filterType);
+    const searchQuery = ($('simSearchInput')?.value || '').toLowerCase().trim();
+
+    const rows = state.similarities.filter(x => {
+      const typeOk = (filterType === 'ALL') || (x.similarity_type === filterType);
+      const searchOk = !searchQuery ||
+        (x.material_a || '').toLowerCase().includes(searchQuery) ||
+        (x.material_b || '').toLowerCase().includes(searchQuery) ||
+        (x.desc_a || '').toLowerCase().includes(searchQuery) ||
+        (x.desc_b || '').toLowerCase().includes(searchQuery) ||
+        (x.mfr_a || '').toLowerCase().includes(searchQuery) ||
+        (x.mfr_b || '').toLowerCase().includes(searchQuery);
+      return typeOk && searchOk;
+    });
+
     const tbody = $('similarityBody');
     if (!tbody) return;
 
     if (!rows.length) {
-      tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted p-4">Belum ada hasil deteksi similarity. Jalankan Analisis AI untuk memetakan alternatif substitusi.</td></tr>';
+      if (!state.similarities.length) {
+        tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted p-4">
+          <i class="bi bi-diagram-3 fs-3 d-block mb-2 text-secondary"></i>
+          Belum ada hasil deteksi similarity. Pastikan data material sudah diunggah, lalu klik <strong>"Jalankan Analisis AI"</strong> di atas.
+        </td></tr>`;
+      } else {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted p-4">Tidak ada data similarity yang sesuai kriteria pencarian atau filter.</td></tr>';
+      }
       return;
     }
 

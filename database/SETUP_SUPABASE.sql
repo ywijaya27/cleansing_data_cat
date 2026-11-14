@@ -374,11 +374,12 @@ BEGIN
         clean_brand(manufacturer) AS norm_brand,
         COALESCE(part_number, '') AS part_number,
         clean_part_number(part_number) AS norm_pn,
-        COALESCE(material_group, 'UNCLASSIFIED') AS material_group,
+        COALESCE(NULLIF(TRIM(material_group), ''), 'UNCLASSIFIED') AS material_group,
         COALESCE(base_uom, '') AS base_uom,
         COALESCE(stock_qty, 0) AS stock_qty,
         COALESCE(stock_value, 0) AS stock_value,
         UPPER(NULLIF(SPLIT_PART(TRIM(REGEXP_REPLACE(material_description, '[^A-Za-z0-9 ]', ' ', 'g')), ' ', 1), '')) AS token1,
+        UPPER(NULLIF(SPLIT_PART(TRIM(REGEXP_REPLACE(material_description, '[^A-Za-z0-9 ]', ' ', 'g')), ' ', 2), '')) AS token2,
         (
             CASE WHEN material_code IS NOT NULL AND material_code != '' THEN 20 ELSE 0 END +
             CASE WHEN material_description IS NOT NULL AND LENGTH(material_description) > 10 THEN 30 ELSE 0 END +
@@ -388,7 +389,8 @@ BEGIN
     FROM public.material_raw;
 
     CREATE INDEX idx_tmp_mat_pn ON temp_mat_prep (norm_pn);
-    CREATE INDEX idx_tmp_mat_grp_tok1 ON temp_mat_prep (material_group, token1);
+    CREATE INDEX idx_tmp_mat_tok1 ON temp_mat_prep (token1);
+    CREATE INDEX idx_tmp_mat_tok2 ON temp_mat_prep (token2);
 
     -- LANGKAH 2: CANDIDATE PAIRS DENGAN INDEXED BLOCKING CEPAT (Menghindari 200 juta perbandingan O(N^2))
     DROP TABLE IF EXISTS temp_candidate_pairs;
@@ -414,7 +416,7 @@ BEGIN
 
     UNION
 
-    -- Block 2: Grup sama DAN Kata Kunci Pertama sama (hanya untuk grup yang sama)
+    -- Block 2: Kata Kunci Pertama sama (token1) & Kemiripan Deskripsi >= 0.40
     SELECT 
         a.id AS id_a, b.id AS id_b,
         a.material_code AS code_a, b.material_code AS code_b,
@@ -428,14 +430,38 @@ BEGIN
         a.stock_qty AS qty_a, b.stock_qty AS qty_b,
         a.stock_value AS val_a, b.stock_value AS val_b,
         a.quality_weight AS qw_a, b.quality_weight AS qw_b,
-        'GROUP_AND_KEYWORD_MATCH' AS block_reason
+        'KEYWORD_MATCH' AS block_reason
     FROM temp_mat_prep a
     JOIN temp_mat_prep b ON a.id < b.id 
-      AND a.material_group = b.material_group 
       AND a.token1 = b.token1
     WHERE (a.norm_pn != b.norm_pn OR a.norm_pn = '')
       AND a.token1 IS NOT NULL 
       AND LENGTH(a.token1) >= 3
+      AND similarity(a.material_description, b.material_description) >= 0.40
+
+    UNION
+
+    -- Block 3: Cross-Token (misal token1 A = token2 B)
+    SELECT 
+        a.id AS id_a, b.id AS id_b,
+        a.material_code AS code_a, b.material_code AS code_b,
+        a.material_description AS desc_a, b.material_description AS desc_b,
+        a.manufacturer AS mfr_a, b.manufacturer AS mfr_b,
+        a.norm_brand AS brand_a, b.norm_brand AS brand_b,
+        a.part_number AS pn_a, b.part_number AS pn_b,
+        a.norm_pn AS npn_a, b.norm_pn AS npn_b,
+        a.material_group AS group_a, b.material_group AS group_b,
+        a.base_uom AS uom_a, b.base_uom AS uom_b,
+        a.stock_qty AS qty_a, b.stock_qty AS qty_b,
+        a.stock_value AS val_a, b.stock_value AS val_b,
+        a.quality_weight AS qw_a, b.quality_weight AS qw_b,
+        'CROSS_TOKEN_MATCH' AS block_reason
+    FROM temp_mat_prep a
+    JOIN temp_mat_prep b ON a.id < b.id 
+      AND a.token1 = b.token2
+    WHERE (a.norm_pn != b.norm_pn OR a.norm_pn = '')
+      AND a.token1 IS NOT NULL AND b.token2 IS NOT NULL
+      AND LENGTH(a.token1) >= 3 AND LENGTH(b.token2) >= 3
       AND similarity(a.material_description, b.material_description) >= 0.45
     LIMIT 10000;
 
@@ -663,7 +689,7 @@ BEGIN
     WHERE (
         (cp.npn_a = cp.npn_b AND LENGTH(cp.npn_a) >= 4 AND cp.brand_a != cp.brand_b)
         OR 
-        (cp.group_a = cp.group_b AND similarity(cp.desc_a, cp.desc_b) >= 0.55)
+        similarity(cp.desc_a, cp.desc_b) >= 0.45
     )
     AND NOT EXISTS (
         SELECT 1 FROM public.duplicate_analysis da 
