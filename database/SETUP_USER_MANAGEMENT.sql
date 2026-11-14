@@ -46,16 +46,13 @@ ON CONFLICT (role) DO UPDATE SET
     can_manage_settings = EXCLUDED.can_manage_settings,
     updated_at = NOW();
 
--- 4. SEED DEFAULT ADMIN USER (Username: admin | Password: admin123)
+-- 4. SEED DEFAULT USERS (Admin & Operator)
 -- SHA-256 dari 'admin123' adalah '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9'
+-- SHA-256 dari 'operator123' adalah 'ec6e1c25258002eb1c67d15c7f45da7945fa4c58778fd7d88faa5e53e3b4698d'
 INSERT INTO public.app_users (username, full_name, password_hash, role, is_active)
-VALUES (
-    'admin',
-    'Administrator Sistem',
-    '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9',
-    'ADMIN',
-    true
-)
+VALUES
+    ('admin', 'Administrator Sistem', '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9', 'ADMIN', true),
+    ('operator', 'Operator Cleansing Data', 'ec6e1c25258002eb1c67d15c7f45da7945fa4c58778fd7d88faa5e53e3b4698d', 'OPERATOR', true)
 ON CONFLICT (username) DO NOTHING;
 
 -- 5. RLS & HAK AKSES

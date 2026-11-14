@@ -42,7 +42,8 @@
       throw new Error('Google Apps Script Web App URL belum diisi. Masukkan URL Web App di menu Pengaturan atau di js/config.js.');
     }
 
-    const payload = JSON.stringify({ action, args });
+    const token = JSON.parse(sessionStorage.getItem('admin_session') || 'null')?.token || '';
+    const payload = JSON.stringify({ action, args, token });
     const res = await fetch(gasUrl, {
       method: 'POST',
       headers: {
@@ -266,7 +267,8 @@
             fullName: user.full_name || user.username,
             full_name: user.full_name || user.username,
             role: user.role,
-            permissions: permissions || {}
+            permissions: permissions || {},
+            token: 'direct_' + user.id + '_' + Date.now()
           },
           message: 'Login berhasil.'
         };
@@ -687,7 +689,7 @@
           })
           .withFailureHandler(e => {
             reject(new Error(e?.message || String(e)));
-          })[name](...args);
+          }).apiRequest(name, args, JSON.parse(sessionStorage.getItem('admin_session') || 'null')?.token || '');
       });
     }
 
@@ -699,20 +701,23 @@
       if (gasUrl) {
         return await callGasWebApi(name, args);
       } else {
-        // Jika GAS_URL belum diisi, fallback otomatis ke Direct Supabase agar aplikasi tetap berfungsi
-        console.info('GAS_URL belum diatur, mencoba Direct Supabase mode...');
-        return await executeDirectSupabase(name, ...args);
+        // A backend is required for server-side authorization.
+        throw new Error('Mode direct dinonaktifkan. Gunakan backend Apps Script atau API untuk validasi hak akses.');
       }
     }
 
     // 3. Mode 'direct' (Langsung ke Supabase)
     if (mode === 'direct') {
-      return await executeDirectSupabase(name, ...args);
+      throw new Error('Mode direct dinonaktifkan. Gunakan backend Apps Script atau API untuk validasi hak akses.');
     }
 
     // 4. Mode 'api' (Backend Node.js Express)
     try {
       switch (name) {
+        case 'getSession': return await backendHttp('/auth/session');
+        case 'logoutUser': return await backendHttp('/auth/logout', { method: 'POST' });
+        case 'authorizeConsistencyExport': return await backendHttp('/consistency/export-authorization', { method: 'POST' });
+        case 'getConsistencyMaterials': return await backendHttp(`/consistency/materials?page=${Number(args[0]) || 1}&limit=${Number(args[1]) || 100}`);
         case 'getAppStatus': return await backendHttp('/status');
         case 'getDashboardData':
         case 'getDashboardSummary': return await backendHttp('/materials/dashboard-summary');
@@ -777,8 +782,7 @@
           throw new Error(`Endpoint untuk aksi "${name}" tidak ditemukan.`);
       }
     } catch (err) {
-      console.warn('Backend API tidak merespons, fallback ke Direct Supabase:', err.message);
-      return await executeDirectSupabase(name, ...args);
+      throw err;
     }
   };
 })();

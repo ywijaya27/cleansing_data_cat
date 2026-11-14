@@ -1,6 +1,18 @@
 (() => {
   'use strict';
 
+  const DEFAULT_GUEST_ACCESS = {
+    role: 'GUEST',
+    allowed_menus: ['dashboard', 'materials', 'similarity', 'consistency', 'reports', 'settings'],
+    can_upload: false,
+    can_run_ai: false,
+    can_merge: false,
+    can_manage_settings: false,
+    can_review: false,
+    can_run_consistency: false,
+    can_export_consistency: false
+  };
+
   const state = {
     page: 1,
     pageSize: 25,
@@ -8,7 +20,7 @@
     parsedRows: [],
     chart: null,
     configured: false,
-    supabaseUrl: 'https://tayybadwfypmedjixemd.supabase.co',
+    supabaseUrl: window.APP_CONFIG?.SUPABASE_URL || '',
     duplicates: [],
     similarities: [],
     activeDuplicate: null,
@@ -17,14 +29,7 @@
       username: 'guest',
       fullName: 'Pengunjung (Guest)'
     },
-    accessControl: {
-      role: 'GUEST',
-      allowed_menus: ['dashboard', 'materials', 'similarity', 'consistency'],
-      can_upload: false,
-      can_run_ai: false,
-      can_merge: false,
-      can_manage_settings: false
-    },
+    accessControl: Object.assign({}, DEFAULT_GUEST_ACCESS),
     allRoles: [],
     users: [],
     consistencyData: []
@@ -109,62 +114,85 @@
   }
 
   function isMenuAllowed(section) {
-    if (state.currentUser.role === 'ADMIN') return true;
-    if (section === 'reports') return true;
-    const allowed = state.accessControl?.allowed_menus || ['dashboard', 'materials', 'similarity', 'reports'];
-    return allowed.includes(section);
+    return AccessPolicy.normalize(state.currentUser.role, state.accessControl).allowed_menus.includes(section);
+  }
+
+  function canAction(action, args = []) {
+    return AccessPolicy.allows(state.currentUser.role, state.accessControl, action, args);
+  }
+
+  function requireAction(action, args = []) {
+    if (canAction(action, args)) return true;
+    toast('Anda tidak memiliki izin untuk tindakan ini.', 'error');
+    return false;
   }
 
   function applyAccessControl() {
-    const isAdm = (state.currentUser.role === 'ADMIN');
-    const allowedMenus = state.accessControl?.allowed_menus || ['dashboard', 'materials', 'similarity', 'reports'];
-
-    // Update Sidebar Navigation Items
+    const role = String(state.currentUser?.role || 'GUEST').toUpperCase();
+    const loggedIn = Boolean(
+      (state.currentUser?.token || (state.currentUser?.username && role !== 'GUEST')) &&
+      role !== 'GUEST'
+    );
     document.querySelectorAll('.nav-item').forEach(el => {
-      const sec = el.dataset.section;
-      const allowed = isAdm || sec === 'reports' || allowedMenus.includes(sec);
+      const allowed = isMenuAllowed(el.dataset.section);
       el.classList.toggle('locked', !allowed);
+      el.setAttribute('aria-disabled', String(!allowed));
     });
-
-    // Update Topbar User Chip & Action Buttons
-    const userChip = $('userChip');
-    const userNameEl = $('currentUser');
-    const loginBtn = $('openLoginModalBtn');
-    const logoutBtn = $('logoutBtn');
-    const sidebarLogoutBtn = $('sidebarLogoutBtn');
-    const roleLabel = $('sidebarRoleLabel');
-
-    if (isAdm) {
-      if (userChip) userChip.classList.add('admin');
-      if (userNameEl) userNameEl.textContent = (state.currentUser.fullName || 'Admin') + ' (Admin)';
-      if (loginBtn) loginBtn.classList.add('d-none');
-      if (logoutBtn) logoutBtn.classList.remove('d-none');
-      if (sidebarLogoutBtn) sidebarLogoutBtn.classList.remove('d-none');
-      if (roleLabel) roleLabel.innerHTML = '<i class="bi bi-shield-check text-accent me-1"></i>Administrator';
-    } else {
-      if (userChip) userChip.classList.remove('admin');
-      if (userNameEl) userNameEl.textContent = 'Pengunjung (Guest)';
-      if (loginBtn) loginBtn.classList.remove('d-none');
-      if (logoutBtn) logoutBtn.classList.add('d-none');
-      if (sidebarLogoutBtn) sidebarLogoutBtn.classList.add('d-none');
-      if (roleLabel) roleLabel.innerHTML = '<i class="bi bi-person me-1"></i>Mode Pengunjung (Guest)';
+    if ($('userChip')) {
+      $('userChip').classList.toggle('admin', role === 'ADMIN');
+      $('userChip').classList.toggle('operator', role === 'OPERATOR');
     }
-
-    // Aksi tombol khusus
-    if ($('runAiAnalysisBtn')) {
-      const canRunAi = isAdm || Boolean(state.accessControl?.can_run_ai);
-      $('runAiAnalysisBtn').classList.toggle('d-none', !canRunAi);
+    if ($('userChipIcon')) {
+      if (role === 'ADMIN') {
+        $('userChipIcon').className = 'bi bi-shield-check me-1 text-accent';
+      } else if (role === 'OPERATOR') {
+        $('userChipIcon').className = 'bi bi-person-badge me-1 text-primary';
+      } else {
+        $('userChipIcon').className = 'bi bi-person-circle me-1';
+      }
     }
-    if ($('btnMergeDuplicate')) {
-      const canMerge = isAdm || Boolean(state.accessControl?.can_merge);
-      $('btnMergeDuplicate').classList.toggle('d-none', !canMerge);
+    if ($('currentUser')) {
+      $('currentUser').textContent = loggedIn
+        ? `${state.currentUser.full_name || state.currentUser.fullName || state.currentUser.username} (${role})` : 'Pengunjung (Guest)';
+    }
+    if ($('sidebarRoleLabel')) {
+      if (!loggedIn || role === 'GUEST') {
+        $('sidebarRoleLabel').innerHTML = '<i class="bi bi-person me-1"></i>Mode Pengunjung (Guest)';
+      } else if (role === 'ADMIN') {
+        $('sidebarRoleLabel').innerHTML = '<i class="bi bi-shield-check text-accent me-1"></i>ADMINISTRATOR';
+      } else if (role === 'OPERATOR') {
+        $('sidebarRoleLabel').innerHTML = '<i class="bi bi-person-badge text-primary me-1"></i>OPERATOR';
+      } else {
+        $('sidebarRoleLabel').innerHTML = `<i class="bi bi-person-badge me-1"></i>${escapeHtml(role)}`;
+      }
+    }
+    if ($('openLoginModalBtn')) $('openLoginModalBtn').classList.toggle('d-none', loggedIn);
+    ['logoutBtn', 'sidebarLogoutBtn'].forEach(id => { if ($(id)) $(id).classList.toggle('d-none', !loggedIn); });
+    updateReportUserMeta();
+    const actions = {
+      uploadBtn: ['uploadMaterials'], runAiAnalysisBtn: ['runAICleansingAnalysis'],
+      btnMergeDuplicate: ['saveDuplicateDecision', ['', 'MERGE_AND_OBSOLETE']],
+      btnConfirmDuplicate: ['saveDuplicateDecision', ['', 'APPROVED_DUPLICATE']],
+      btnRejectDuplicate: ['saveDuplicateDecision', ['', 'REJECTED_DIFFERENT']],
+      runConsistencyAuditBtn: ['getConsistencyMaterials'], exportConsistencyBtn: ['authorizeConsistencyExport'],
+      saveConfigBtn: ['setupSupabaseConfig'], testConnectionBtn: ['testSupabaseConnection']
+    };
+    Object.entries(actions).forEach(([id, [action, args]]) => {
+      if ($(id)) $(id).classList.toggle('d-none', !canAction(action, args));
+    });
+    const active = document.querySelector('.content-section.active');
+    if (active && !isMenuAllowed(active.id.replace('section-', ''))) {
+      active.classList.remove('active');
+      const first = AccessPolicy.normalize(role, state.accessControl).allowed_menus[0];
+      if (first) navigateTo(first);
     }
   }
 
   function navigateTo(section) {
+    if (!section) return;
     if (!isMenuAllowed(section)) {
-      toast(`Menu "${titles[section] || section}" memerlukan login Admin. Silakan login sebagai Admin untuk mengakses menu ini.`, 'error');
-      openAdminLoginModal();
+      toast(`Anda tidak memiliki akses ke menu "${titles[section] || section}". Silakan login terlebih dahulu.`, 'error');
+      if (!state.currentUser.token) openAdminLoginModal();
       return;
     }
 
@@ -177,6 +205,8 @@
     if ($('pageTitle')) $('pageTitle').textContent = titles[section] || 'Aplikasi';
     if ($('sidebar')) $('sidebar').classList.remove('open');
 
+    try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (_) {}
+
     if (section === 'dashboard') loadDashboard();
     if (section === 'materials') loadMaterials();
     if (section === 'duplicates') loadDuplicates();
@@ -185,6 +215,7 @@
     if (section === 'reports') loadApprovedReport();
     if (section === 'upload') loadUploadHistory();
     if (section === 'users') loadUserManagement();
+    if (section === 'settings') populateSupabaseInputs();
   }
 
   window.navigateToSection = navigateTo;
@@ -193,37 +224,71 @@
    * Inisialisasi Aplikasi
    */
   async function init() {
-    restoreAdminSession();
+    await restoreAdminSession();
     bindEvents();
     restoreTheme();
     await checkAppStatus();
     await loadAccessControl();
     applyAccessControl();
-    loadDashboard();
+    if (isMenuAllowed('dashboard')) loadDashboard();
   }
 
-  function restoreAdminSession() {
+  async function restoreAdminSession() {
     try {
-      const saved = sessionStorage.getItem('admin_session');
-      if (saved) {
-        const u = JSON.parse(saved);
-        if (u && u.role === 'ADMIN') {
-          state.currentUser = u;
-          if (u.permissions) state.accessControl = u.permissions;
-        }
+      const saved = JSON.parse(sessionStorage.getItem('admin_session') || 'null');
+      if (saved && (saved.token || (saved.role && String(saved.role).toUpperCase() !== 'GUEST'))) {
+        saved.role = String(saved.role || 'GUEST').toUpperCase();
+        state.currentUser = saved;
+        state.accessControl = saved.permissions || {};
+        try {
+          const result = await callServer('getSession');
+          if (result && result.data && result.data.role) {
+            result.data.role = String(result.data.role).toUpperCase();
+            state.currentUser = Object.assign({}, saved, result.data);
+            state.accessControl = result.data.permissions || saved.permissions || {};
+            sessionStorage.setItem('admin_session', JSON.stringify(state.currentUser));
+          }
+        } catch (_) {}
+      } else {
+        sessionStorage.removeItem('admin_session');
+        state.currentUser = { username: 'guest', role: 'GUEST' };
+        state.accessControl = Object.assign({}, DEFAULT_GUEST_ACCESS);
       }
-    } catch (_) {}
+    } catch (_) {
+      sessionStorage.removeItem('admin_session');
+      state.currentUser = { username: 'guest', role: 'GUEST' };
+      state.accessControl = Object.assign({}, DEFAULT_GUEST_ACCESS);
+    }
   }
 
   async function loadAccessControl() {
     try {
       const r = await callServer('getSystemAccessControl');
-      const d = r.data || {};
+      const d = r && r.data ? r.data : {};
       state.allRoles = d.allRoles || [];
-      if (state.currentUser.role === 'GUEST') {
-        state.accessControl = d.guestPermissions || state.accessControl;
+      const role = String(state.currentUser?.role || 'GUEST').toUpperCase();
+      const hasSession = Boolean(state.currentUser?.token || (state.currentUser?.username && role !== 'GUEST'));
+
+      if (!hasSession) {
+        state.accessControl = (d.guestPermissions && Array.isArray(d.guestPermissions.allowed_menus) && d.guestPermissions.allowed_menus.length > 0)
+          ? d.guestPermissions
+          : Object.assign({}, DEFAULT_GUEST_ACCESS);
+      } else if (!state.currentUser?.permissions || !Object.keys(state.currentUser.permissions).length) {
+        try {
+          const session = await callServer('getSession');
+          if (session && session.data && session.data.role) {
+            session.data.role = String(session.data.role).toUpperCase();
+            state.currentUser = Object.assign({}, state.currentUser, session.data);
+            state.accessControl = session.data.permissions || state.accessControl || {};
+          }
+        } catch (_) {}
       }
-    } catch (_) {}
+    } catch (_) {
+      const role = String(state.currentUser?.role || 'GUEST').toUpperCase();
+      if (!state.currentUser?.token && role === 'GUEST') {
+        state.accessControl = Object.assign({}, DEFAULT_GUEST_ACCESS);
+      }
+    }
   }
 
   async function checkAppStatus() {
@@ -233,7 +298,6 @@
       state.configured = Boolean(d.configured && d.connectionOk);
       state.supabaseUrl = d.url || state.supabaseUrl;
 
-      if ($('currentUser')) $('currentUser').textContent = d.userEmail || 'GAS User';
       updateConnectionUI(state.configured, d.connMessage, state.supabaseUrl);
 
       if (!state.configured && !d.configured) {
@@ -382,6 +446,7 @@
   }
 
   async function handleSaveConfig() {
+    if (!requireAction('setupSupabaseConfig')) return;
     const gasUrl = $('gasUrlInput') ? $('gasUrlInput').value.trim() : '';
     const url = $('supabaseUrlInput').value.trim();
     const key = $('supabaseKeyInput').value.trim();
@@ -422,6 +487,7 @@
   }
 
   async function handleTestConnection() {
+    if (!requireAction('testSupabaseConnection')) return;
     try {
       showLoading(true, 'Menguji koneksi ke Supabase...');
       const r = await callServer('testSupabaseConnection');
@@ -459,11 +525,15 @@
     }
 
     try {
-      showLoading(true, 'Memverifikasi akun Administrator...');
+      showLoading(true, 'Memverifikasi akun pengguna...');
       const r = await callServer('loginUser', u, p);
-      const user = r.data;
-      if (user && !user.full_name && user.fullName) {
+      const user = r.data || {};
+      if (!user.full_name && user.fullName) {
         user.full_name = user.fullName;
+      }
+      user.role = String(user.role || 'OPERATOR').toUpperCase();
+      if (!user.token) {
+        user.token = 'session_' + (user.id || user.username || 'user') + '_' + Date.now();
       }
       state.configured = true;
       state.currentUser = user;
@@ -476,10 +546,11 @@
       }
 
       updateConnectionUI(true, 'Terhubung via Google Apps Script Web App', state.supabaseUrl);
+      applyAccessControl();
       await loadAccessControl();
       applyAccessControl();
-      toast(`Selamat datang kembali, ${user.full_name || user.fullName || user.username}! Anda masuk sebagai Administrator.`, 'success');
-      loadDashboard();
+      toast(`Selamat datang kembali, ${user.full_name || user.fullName || user.username}! Anda masuk sebagai ${user.role}.`, 'success');
+      if (isMenuAllowed('dashboard')) navigateTo('dashboard');
     } catch (err) {
       toast('Login gagal: ' + err.message, 'error');
     } finally {
@@ -487,7 +558,8 @@
     }
   }
 
-  function executeLogout() {
+  async function executeLogout() {
+    try { await callServer('logoutUser'); } catch (error) { toast('Sesi server tidak dapat diakhiri: ' + error.message, 'error'); }
     const modalEl = $('logoutModal');
     if (modalEl && typeof bootstrap !== 'undefined') {
       const m = bootstrap.Modal.getInstance(modalEl);
@@ -495,10 +567,17 @@
     }
     sessionStorage.removeItem('admin_session');
     state.currentUser = { username: 'guest', full_name: 'Pengunjung', role: 'GUEST' };
+    state.accessControl = Object.assign({}, DEFAULT_GUEST_ACCESS);
+    state.consistencyData = [];
+    state.consistencySummary = null;
+    state.duplicates = [];
+    state.similarities = [];
+    state.reportData = null;
+    ['consistencyTableBody', 'materialsBody', 'duplicatesBody', 'similarityBody'].forEach(id => { if ($(id)) $(id).textContent = ''; });
     loadAccessControl().then(() => {
       applyAccessControl();
-      navigateTo('dashboard');
-      toast('Anda telah keluar dari akun Administrator. Sekarang dalam Mode Pengunjung (Guest).', 'info');
+      if (isMenuAllowed('dashboard')) navigateTo('dashboard');
+      toast('Anda telah keluar dari akun. Sekarang dalam Mode Pengunjung (Guest).', 'info');
     });
   }
 
@@ -659,7 +738,7 @@
         id: row.material_code || `Row-${idx + 1}`,
         material_code: row.material_code || `Row-${idx + 1}`,
         item_text_result: desc,
-        template_code: row.template_code || (desc.startsWith('SERVICE:') ? 'SVC-01' : 'GEN-01'),
+        template_code: row.template_code || '',
         major_name: row.noun || row.major_name || firstSegment,
         modifier1: row.modifier1 || '',
         modifier2: row.modifier2 || '',
@@ -805,6 +884,7 @@
   }
 
   async function uploadFile() {
+    if (!requireAction('uploadMaterials')) return;
     if (!state.selectedFile || !state.parsedRows.length) return;
     try {
       showLoading(true, 'Mengupload ke Supabase...');
@@ -880,6 +960,7 @@
 
       $('pageIndicator').textContent = 'Page ' + state.page;
       document.querySelectorAll('.normalize-btn').forEach(b => {
+        b.classList.toggle('d-none', !canAction('normalizeMaterial'));
         b.addEventListener('click', () => normalizeOne(b.dataset.id));
       });
 
@@ -892,6 +973,7 @@
   }
 
   async function normalizeOne(id) {
+    if (!requireAction('normalizeMaterial')) return;
     try {
       showLoading(true, 'Menormalisasi data...');
       const r = await callServer('normalizeMaterial', id);
@@ -908,6 +990,7 @@
    * JALANKAN AI CLEANSING & RATIONALIZATION ENGINE
    */
   async function handleRunAiAnalysis() {
+    if (!requireAction('runAICleansingAnalysis')) return;
     try {
       showLoading(true, 'Menjalankan AI Duplicate & Similarity Detection Engine...');
       const r = await callServer('runAICleansingAnalysis', 75, 60);
@@ -1081,6 +1164,7 @@
   }
 
   async function handleSaveDuplicateDecision(decision) {
+    if (!requireAction('saveDuplicateDecision', ['', decision])) return;
     if (!state.activeDuplicate) return;
 
     const item = state.activeDuplicate;
@@ -1161,26 +1245,37 @@
     }).join('');
   }
 
-  /**
-   * LAPORAN EFISIENSI & APPROVED DUPLICATES
-   */
-  async function loadApprovedReport() {
-    // 1. Tampilkan informasi user yang sedang login di kop laporan
+  function updateReportUserMeta() {
     const currentUser = state.currentUser || {};
-    const fullName = currentUser.full_name || currentUser.fullName || (currentUser.username === 'admin' ? 'Administrator Sistem' : currentUser.username) || 'Pengunjung (Guest)';
-    const username = currentUser.username || 'guest';
+    const loggedIn = Boolean(currentUser.token);
     const role = currentUser.role || 'GUEST';
+    const isAdm = role === 'ADMIN';
+    const isOp = role === 'OPERATOR';
+    const fullName = loggedIn
+      ? (currentUser.full_name || currentUser.fullName || currentUser.username)
+      : 'Pengunjung (Guest)';
+    const username = loggedIn ? currentUser.username : 'guest';
 
     if ($('reportByUserName')) $('reportByUserName').textContent = fullName;
     if ($('reportByUserAccount')) $('reportByUserAccount').textContent = username;
     if ($('reportByUserRole')) {
       $('reportByUserRole').textContent = `(Role: ${role})`;
+      $('reportByUserRole').className = isAdm ? 'd-block text-accent fw-bold' : isOp ? 'd-block text-primary fw-bold' : 'd-block text-muted';
     }
+    if ($('printSignName')) $('printSignName').textContent = fullName;
+    if ($('printSignRole')) $('printSignRole').textContent = isAdm ? 'Administrator' : `Reviewer (${role})`;
+  }
+
+  /**
+   * LAPORAN EFISIENSI & APPROVED DUPLICATES
+   */
+  async function loadApprovedReport() {
+    // 1. Tampilkan informasi user yang sedang login di kop laporan
+    updateReportUserMeta();
+
     if ($('reportGeneratedDate')) {
       $('reportGeneratedDate').textContent = new Date().toLocaleString('id-ID', { dateStyle: 'full', timeStyle: 'short' });
     }
-    if ($('printSignName')) $('printSignName').textContent = fullName;
-    if ($('printSignRole')) $('printSignRole').textContent = `Reviewer (${role})`;
 
     const filterVal = $('reportStatusFilter')?.value || 'APPROVED_DUPLICATE';
     if ($('reportFilterBadge')) {
@@ -1521,11 +1616,17 @@
   }
 
   function populateRoleForm(roleKey) {
-    if (!state.allRoles || !state.allRoles.length) return;
     const roleObj = state.allRoles.find(r => r.role === roleKey);
-    if (!roleObj) return;
+    const permissions = AccessPolicy.normalize(roleKey, roleObj || {});
+    const fixed = roleKey === 'ADMIN';
+    document.querySelectorAll('.menu-perm-check, #panel-rbac input[type=checkbox]').forEach(el => { el.disabled = fixed; });
+    document.querySelectorAll('#panel-rbac input[type=checkbox]:not(.menu-perm-check)').forEach(el => { el.disabled = fixed || roleKey === 'GUEST'; });
+    if ($('perm_users')) $('perm_users').disabled = true;
+    if (roleKey === 'GUEST') ['perm_upload', 'perm_duplicates', 'perm_settings'].forEach(id => { if ($(id)) $(id).disabled = true; });
+    if ($('savePermissionsBtn')) $('savePermissionsBtn').disabled = fixed;
+    if ($('rolePermissionHint')) $('rolePermissionHint').textContent = fixed ? 'Administrator memiliki akses penuh. Gunakan OPERATOR untuk akses terbatas.' : 'Izin tindakan hanya berlaku jika akses menu terkait diaktifkan. Guest hanya dapat melihat data.';
 
-    const allowedMenus = Array.isArray(roleObj.allowed_menus) ? roleObj.allowed_menus : [];
+    const allowedMenus = permissions.allowed_menus;
     
     // Checkbox menu
     document.querySelectorAll('.menu-perm-check').forEach(chk => {
@@ -1533,10 +1634,11 @@
     });
 
     // Switch tindakan khusus
-    if ($('actionPermUpload')) $('actionPermUpload').checked = Boolean(roleObj.can_upload);
-    if ($('actionPermRunAi')) $('actionPermRunAi').checked = Boolean(roleObj.can_run_ai);
-    if ($('actionPermMerge')) $('actionPermMerge').checked = Boolean(roleObj.can_merge);
-    if ($('actionPermSettings')) $('actionPermSettings').checked = Boolean(roleObj.can_manage_settings);
+    if ($('actionPermUpload')) $('actionPermUpload').checked = Boolean(permissions.can_upload);
+    if ($('actionPermRunAi')) $('actionPermRunAi').checked = Boolean(permissions.can_run_ai);
+    if ($('actionPermMerge')) $('actionPermMerge').checked = Boolean(permissions.can_merge);
+    if ($('actionPermSettings')) $('actionPermSettings').checked = Boolean(permissions.can_manage_settings);
+    ['can_review', 'can_run_consistency', 'can_export_consistency'].forEach(key => { if ($(key)) $(key).checked = permissions[key]; });
   }
 
   async function handleSavePermissions() {
@@ -1549,6 +1651,9 @@
     });
 
     const permObj = {
+      can_review: $('can_review')?.checked || false,
+      can_run_consistency: $('can_run_consistency')?.checked || false,
+      can_export_consistency: $('can_export_consistency')?.checked || false,
       can_upload: $('actionPermUpload')?.checked || false,
       can_run_ai: $('actionPermRunAi')?.checked || false,
       can_merge: $('actionPermMerge')?.checked || false,
@@ -1748,15 +1853,11 @@
 
   function loadConsistencyView() {
     renderAbbreviationModalTable();
-    if (!state.consistencyData || !state.consistencyData.length) {
-      // Jika belum diaudit, jalankan otomatis audit pertama kali
-      runConsistencyAudit();
-    } else {
-      renderConsistencyTable();
-    }
+    renderConsistencyTable();
   }
 
   async function runConsistencyAudit() {
+    if (!requireAction('getConsistencyMaterials')) return;
     if (!window.ConsistencyEngine) {
       toast('ConsistencyEngine belum dimuat.', 'error');
       return;
@@ -1765,9 +1866,20 @@
     try {
       showLoading(true, 'Mengambil data katalog & menjalankan audit konsistensi...');
       
-      // Ambil data material aktif dari server (limit 500 untuk evaluasi komprehensif)
-      const r = await callServer('getMaterials', 1, 500, '');
-      const rawRows = (r.data && r.data.rows) || [];
+      // Fetch every page; the server caps each response at 100 records.
+      state.consistencyData = [];
+      state.consistencySummary = null;
+      renderConsistencyTable();
+      const rawRows = [];
+      let page = 1;
+      while (true) {
+        const r = await callServer('getConsistencyMaterials', page, 100, '');
+        const rows = r.data?.rows || [];
+        rawRows.push(...rows);
+        showLoading(true, `Memeriksa katalog: ${fmt(rawRows.length)} material dimuat...`);
+        if (rows.length < (r.data?.pageSize || 100)) break;
+        page++;
+      }
 
       if (!rawRows.length) {
         toast('Tidak ada data material di database untuk diaudit.', 'warning');
@@ -1783,7 +1895,7 @@
           id: row.id || row.material_code,
           material_code: row.material_code,
           item_text_result: desc,
-          template_code: row.template_code || (desc.startsWith('SERVICE:') ? 'SVC-01' : 'GEN-01'),
+          template_code: row.template_code || '',
           major_name: row.noun || row.major_name || firstSegment,
           modifier1: row.modifier1 || '',
           modifier2: row.modifier2 || '',
@@ -1924,7 +2036,9 @@
     `).join('');
   }
 
-  function exportConsistencyExcel() {
+  async function exportConsistencyExcel() {
+    if (!requireAction('authorizeConsistencyExport')) return;
+    try { await callServer('authorizeConsistencyExport'); } catch (error) { toast(error.message, 'error'); return; }
     if (!state.consistencyData || !state.consistencyData.length) {
       toast('Jalankan audit terlebih dahulu sebelum mengunduh hasil.', 'warning');
       return;

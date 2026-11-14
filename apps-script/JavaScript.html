@@ -1,6 +1,5902 @@
 <script>
+/**
+ * Konfigurasi Aplikasi Cleansing Data & Material Intelligence
+ * Menggunakan Google Apps Script Web App sebagai Backend REST API
+ */
+window.APP_CONFIG = {
+  // Mode koneksi utama: 'appscript' (Backend Google Apps Script)
+  // Opsi lain: 'api' (Node.js/Express) atau 'direct' (Supabase langsung)
+  MODE: 'appscript',
+
+  // Masukkan URL Web App Google Apps Script Anda di sini:
+  // Contoh: 'https://script.google.com/macros/s/AKfycbx.../exec'
+  GAS_URL: 'https://script.google.com/macros/s/AKfycbxb1A_cF7CHNlRKARSdC4B2RN6FV3iFRpJHkJ4QgC9s13J_7ZZo051bhUBeVstO_862/exec',
+
+  // URL Backend Node.js Express (opsional jika menggunakan mode 'api')
+  API_BASE_URL: 'http://localhost:5000/api',
+
+  // Konfigurasi Database Supabase PostgreSQL (dikelola oleh backend Apps Script)
+  SUPABASE_URL: 'https://tayybadwfypmedjixemd.supabase.co',
+  SUPABASE_KEY: '',
+
+  // Versi Aplikasi
+  VERSION: '2.2.0-appscript'
+};
+
+;
+/* Shared by the browser, Node API and generated Apps Script AccessPolicy.gs. */
+var AccessPolicy = (() => {
+  'use strict';
+  const menus = ['dashboard', 'upload', 'materials', 'duplicates', 'similarity', 'consistency', 'reports', 'users', 'settings'];
+  const flags = ['can_upload', 'can_run_ai', 'can_review', 'can_merge', 'can_manage_settings', 'can_run_consistency', 'can_export_consistency'];
+  function normalize(role, raw = {}) {
+    role = String(role || 'GUEST').toUpperCase();
+    let allowed = raw.allowed_menus;
+    if (typeof allowed === 'string') { try { allowed = JSON.parse(allowed); } catch (_) { allowed = []; } }
+    const result = { role, allowed_menus: Array.isArray(allowed) ? allowed.filter(x => menus.includes(x)) : [] };
+    flags.forEach(key => { result[key] = raw[key] === true; });
+    if (role === 'ADMIN') {
+      result.allowed_menus = menus.slice();
+      flags.forEach(key => { result[key] = true; });
+    } else {
+      result.allowed_menus = result.allowed_menus.filter(x => x !== 'users');
+      if (role === 'GUEST') {
+        result.allowed_menus = result.allowed_menus.filter(x => !['upload', 'duplicates'].includes(x));
+        flags.forEach(key => { result[key] = false; });
+      }
+    }
+    return result;
+  }
+  const rules = {
+    getDashboardData: ['dashboard'], getDashboardSummary: ['dashboard'],
+    getMaterials: ['materials'], getMaterialMaster: ['materials'],
+    getConsistencyMaterials: ['consistency', 'can_run_consistency'],
+    authorizeConsistencyExport: ['consistency', 'can_export_consistency'],
+    uploadMaterials: ['upload', 'can_upload'], uploadMasterData: ['upload', 'can_upload'],
+    getUploadHistory: ['upload'], normalizeMaterial: ['materials', 'can_upload'],
+    runAICleansingAnalysis: ['duplicates', 'can_run_ai'], runAiCleansingAnalysis: ['duplicates', 'can_run_ai'],
+    getDuplicateCandidates: ['duplicates'], getDuplicates: ['duplicates'],
+    getSimilarMaterials: ['similarity'], getApprovedDuplicatesReport: ['reports'],
+    setupSupabaseConfig: ['settings', 'can_manage_settings'], testSupabaseConnection: ['settings', 'can_manage_settings'],
+    getUserManagementData: ['users'], saveRolePermissions: ['users'], saveAppUser: ['users'], deleteAppUser: ['users']
+  };
+  function allows(role, raw, action, args = []) {
+    if (['loginUser', 'getAppStatus', 'getSystemAccessControl', 'getSession', 'logoutUser'].includes(action)) return true;
+    const permission = normalize(role, raw);
+    const rule = action === 'saveDuplicateDecision'
+      ? ['duplicates', args[1] === 'MERGE_AND_OBSOLETE' ? 'can_merge' : 'can_review'] : rules[action];
+    return Boolean(rule && permission.allowed_menus.includes(rule[0]) && (!rule[1] || permission[rule[1]]));
+  }
+  return { menus, flags, normalize, allows };
+})();
+if (typeof module !== 'undefined') module.exports = AccessPolicy;
+
+;
+/**
+ * Client API Adapter
+ * Menghubungkan antarmuka frontend ke:
+ * 1. Google Apps Script Web App (Mode 'appscript' / GAS REST API via fetch)
+ * 2. Lingkungan Internal Apps Script (via native google.script.run)
+ * 3. Database Supabase PostgreSQL secara langsung (Direct Mode - untuk hosting statis tanpa backend)
+ * 4. Backend REST API Node.js / Express (Mode 'api' di localhost)
+ */
 (() => {
   'use strict';
+
+  const config = window.APP_CONFIG || {
+    MODE: 'appscript',
+    GAS_URL: '',
+    API_BASE_URL: 'http://localhost:5000/api',
+    SUPABASE_URL: 'https://tayybadwfypmedjixemd.supabase.co',
+    SUPABASE_KEY: ''
+  };
+
+  /**
+   * Helper Pengambilan Kredensial & URL
+   * Memprioritaskan nilai yang sudah dikonfigurasi di js/config.js agar tidak tertimpa cache localStorage lama.
+   */
+  const getGasUrl = () => {
+    return (config.GAS_URL || localStorage.getItem('gas_url') || '').trim();
+  };
+
+  const getSupabaseUrl = () => {
+    return (config.SUPABASE_URL || localStorage.getItem('supabase_url') || 'https://tayybadwfypmedjixemd.supabase.co').replace(/\/$/, '');
+  };
+
+  const getSupabaseKey = () => {
+    return (config.SUPABASE_KEY || localStorage.getItem('supabase_key') || '').trim();
+  };
+
+  /**
+   * Helper Request ke Google Apps Script Web App (POST dengan text/plain anti-CORS preflight)
+   */
+  async function callGasWebApi(action, args = []) {
+    const gasUrl = getGasUrl();
+    if (!gasUrl) {
+      throw new Error('Google Apps Script Web App URL belum diisi. Masukkan URL Web App di menu Pengaturan atau di js/config.js.');
+    }
+
+    const token = JSON.parse(sessionStorage.getItem('admin_session') || 'null')?.token || '';
+    const payload = JSON.stringify({ action, args, token });
+    const res = await fetch(gasUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8' // WAJIB text/plain agar tidak memicu CORS OPTIONS preflight ditolak GAS
+      },
+      body: payload
+    });
+
+    const rawText = await res.text().catch(() => '');
+    if (!res.ok) {
+      throw new Error(rawText || `GAS Web App HTTP ${res.status}: ${res.statusText}`);
+    }
+
+    let data = {};
+    try {
+      data = rawText ? JSON.parse(rawText) : {};
+    } catch (_) {
+      if (/<!doctype|<html|<title>/i.test(rawText)) {
+        throw new Error('Google Apps Script mengembalikan halaman HTML, bukan JSON. Pastikan Web App sudah di-deploy dengan akses "Anyone (Siapa saja)" dan URL /exec benar.');
+      }
+      throw new Error('Respons Google Apps Script tidak valid (bukan JSON).');
+    }
+
+    if (!data.success) {
+      throw new Error(data.message || 'Eksekusi Google Apps Script gagal.');
+    }
+    return data;
+  }
+
+  /**
+   * Helper SHA-256 Hash di Browser via Web Crypto API
+   */
+  async function sha256Hex(str) {
+    const buf = new TextEncoder().encode(str);
+    const hash = await window.crypto.subtle.digest('SHA-256', buf);
+    return Array.from(new Uint8Array(hash))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+  }
+
+  /**
+   * Helper Request langsung ke Supabase REST API (PostgREST)
+   */
+  async function supabaseRequest(endpoint, options = {}) {
+    const url = getSupabaseUrl();
+    const key = getSupabaseKey();
+
+    if (!key) {
+      throw new Error('Supabase Key belum dimasukkan. Buka menu Pengaturan untuk memasukkan Service Role Key Supabase Anda.');
+    }
+
+    const fullUrl = `${url}/rest/v1/${endpoint.replace(/^\//, '')}`;
+    const headers = {
+      'apikey': key,
+      'Authorization': `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      'Prefer': options.prefer || 'return=representation',
+      ...(options.headers || {})
+    };
+
+    const res = await fetch(fullUrl, {
+      method: options.method || 'GET',
+      headers,
+      body: options.body ? JSON.stringify(options.body) : undefined
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      let errJson;
+      try { errJson = JSON.parse(errText); } catch (_) { errJson = { message: errText }; }
+      throw new Error(errJson.message || `Supabase HTTP ${res.status}: ${res.statusText}`);
+    }
+
+    const text = await res.text();
+    try {
+      return text ? JSON.parse(text) : null;
+    } catch (_) {
+      return text;
+    }
+  }
+
+  /**
+   * Helper fetch HTTP request ke Backend Node.js / Express
+   */
+  async function backendHttp(endpoint, options = {}) {
+    const baseUrl = (config.API_BASE_URL || '').replace(/\/$/, '');
+    const url = endpoint.startsWith('http') ? endpoint : `${baseUrl}${endpoint}`;
+
+    const headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      ...(options.headers || {})
+    };
+
+    try {
+      const savedSession = sessionStorage.getItem('admin_session');
+      if (savedSession) {
+        const u = JSON.parse(savedSession);
+        if (u && u.token) headers['Authorization'] = `Bearer ${u.token}`;
+      }
+    } catch (_) {}
+
+    const res = await fetch(url, {
+      ...options,
+      headers
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.message || `HTTP ${res.status}: ${res.statusText}`);
+    }
+    return data;
+  }
+
+  /**
+   * Handler Direct Supabase untuk seluruh aksi sistem (Fallback)
+   */
+  async function executeDirectSupabase(name, ...args) {
+    const sUrl = getSupabaseUrl();
+    const sKey = getSupabaseKey();
+
+    switch (name) {
+      case 'getAppStatus': {
+        if (!sKey) {
+          return {
+            success: true,
+            data: {
+              configured: false,
+              connectionOk: false,
+              url: sUrl,
+              connMessage: 'Supabase Key belum dimasukkan. Buka menu Pengaturan.'
+            }
+          };
+        }
+        try {
+          await supabaseRequest('material_raw?select=id&limit=1');
+          return {
+            success: true,
+            data: {
+              configured: true,
+              connectionOk: true,
+              url: sUrl,
+              connMessage: 'Terhubung ke database Supabase PostgreSQL.'
+            }
+          };
+        } catch (err) {
+          return {
+            success: true,
+            data: {
+              configured: false,
+              connectionOk: false,
+              url: sUrl,
+              connMessage: 'Koneksi gagal: ' + err.message
+            }
+          };
+        }
+      }
+
+      case 'setupSupabaseConfig': {
+        const [url, key] = args;
+        if (!url) throw new Error('Project URL Supabase wajib diisi.');
+        if (!key) throw new Error('Service Role Key wajib diisi.');
+
+        const cleanUrl = url.trim().replace(/\/$/, '');
+        const cleanKey = key.trim();
+
+        const testRes = await fetch(`${cleanUrl}/rest/v1/material_raw?select=id&limit=1`, {
+          headers: {
+            'apikey': cleanKey,
+            'Authorization': `Bearer ${cleanKey}`
+          }
+        });
+
+        if (!testRes.ok) {
+          const errText = await testRes.text();
+          throw new Error('Gagal terhubung ke Supabase: ' + (errText || testRes.statusText));
+        }
+
+        localStorage.setItem('supabase_url', cleanUrl);
+        localStorage.setItem('supabase_key', cleanKey);
+
+        return {
+          success: true,
+          data: { url: cleanUrl },
+          message: 'Koneksi ke Supabase BERHASIL dan disimpan di browser!'
+        };
+      }
+
+      case 'testSupabaseConnection': {
+        await supabaseRequest('material_raw?select=id&limit=1');
+        return { success: true, message: 'Koneksi ke Supabase PostgreSQL BERHASIL!' };
+      }
+
+      case 'loginUser': {
+        const [username, password] = args;
+        if (!username || !password) throw new Error('Username dan password wajib diisi.');
+        const uName = username.trim().toLowerCase();
+        const pHash = await sha256Hex(password);
+
+        const users = await supabaseRequest(`app_users?username=eq.${encodeURIComponent(uName)}&is_active=eq.true&limit=1`);
+        if (!users || !users.length) throw new Error('Username atau password salah.');
+        const user = users[0];
+        if (user.password_hash !== pHash) throw new Error('Username atau password salah.');
+
+        let permissions = null;
+        try {
+          const perms = await supabaseRequest(`app_role_permissions?role=eq.${encodeURIComponent(user.role)}&limit=1`);
+          if (perms && perms[0]) {
+            permissions = perms[0];
+            if (typeof permissions.allowed_menus === 'string') {
+              try { permissions.allowed_menus = JSON.parse(permissions.allowed_menus); } catch (_) {}
+            }
+          }
+        } catch (_) {}
+
+        return {
+          success: true,
+          data: {
+            id: user.id,
+            username: user.username,
+            fullName: user.full_name || user.username,
+            full_name: user.full_name || user.username,
+            role: user.role,
+            permissions: permissions || {},
+            token: 'direct_' + user.id + '_' + Date.now()
+          },
+          message: 'Login berhasil.'
+        };
+      }
+
+      case 'getSystemAccessControl': {
+        let allRoles = [];
+        try {
+          allRoles = await supabaseRequest('app_role_permissions?select=*') || [];
+          allRoles.forEach(r => {
+            if (typeof r.allowed_menus === 'string') {
+              try { r.allowed_menus = JSON.parse(r.allowed_menus); } catch (_) {}
+            }
+          });
+        } catch (_) {}
+
+        return {
+          success: true,
+          data: {
+            allRoles,
+            guestPermissions: allRoles.find(r => r.role === 'GUEST') || {
+              role: 'GUEST',
+              allowed_menus: ['dashboard', 'materials', 'similarity', 'reports'],
+              can_upload: false,
+              can_run_ai: false,
+              can_merge: false,
+              can_manage_settings: false
+            }
+          }
+        };
+      }
+
+      case 'getDashboardData':
+      case 'getDashboardSummary': {
+        const [allMat, allDup, allSim] = await Promise.all([
+          supabaseRequest('material_raw?select=id,material_description,manufacturer,part_number,base_uom,stock_qty,stock_value,material_group'),
+          supabaseRequest('duplicate_analysis?select=potential_saving,review_status'),
+          supabaseRequest('similar_material?select=id')
+        ]);
+
+        const totalMat = allMat?.length || 0;
+        const dupCount = allDup?.length || 0;
+        const simCount = allSim?.length || 0;
+        const pendingReview = allDup?.filter(x => x.review_status === 'PENDING').length || 0;
+        const totalSavings = (allDup || []).reduce((acc, x) => acc + (Number(x.potential_saving) || 0), 0);
+
+        const groupMap = {};
+        let noMfr = 0, noPn = 0, noUom = 0;
+        (allMat || []).forEach(m => {
+          const g = m.material_group || 'Uncategorized';
+          groupMap[g] = (groupMap[g] || 0) + 1;
+          if (!m.manufacturer) noMfr++;
+          if (!m.part_number) noPn++;
+          if (!m.base_uom) noUom++;
+        });
+        const commodity = Object.keys(groupMap)
+          .map(k => ({ group: k, count: groupMap[k] }))
+          .sort((a, b) => b.count - a.count)
+          .slice(0, 8);
+        const totalCells = Math.max(1, totalMat * 4);
+        const missingCells = noMfr + noPn + noUom;
+        const qualityScore = totalMat ? Math.round(((totalCells - missingCells) / totalCells) * 1000) / 10 : 100;
+
+        return {
+          success: true,
+          data: {
+            totalMaterial: totalMat,
+            duplicateCandidate: dupCount,
+            similarCandidate: simCount,
+            pendingReview: pendingReview,
+            potentialSaving: totalSavings,
+            dataQualityScore: qualityScore,
+            qualityIssues: { noMfr, noPn, noUom },
+            commodity,
+            insight: `Ditemukan ${dupCount} kandidat duplikat dan ${simCount} material serupa. Lakukan review pada menu Duplicate Review.`,
+            // Alias kompatibilitas
+            total_materials: totalMat,
+            duplicated_count: dupCount,
+            similar_count: simCount,
+            potential_savings: totalSavings,
+            data_quality_score: qualityScore,
+            pending_review_count: pendingReview,
+            group_distribution: commodity
+          }
+        };
+      }
+
+      case 'getMaterials':
+      case 'getMaterialMaster': {
+        const [page = 1, pageSize = 25, search = ''] = args;
+        const p = Math.max(1, Number(page) || 1);
+        const ps = Math.min(100, Math.max(10, Number(pageSize) || 25));
+        const offset = (p - 1) * ps;
+        let q = `material_raw?select=*&order=id.desc&limit=${ps}&offset=${offset}`;
+        if (search) {
+          const sc = encodeURIComponent(`%${String(search).trim()}%`);
+          q += `&or=(material_code.ilike.${sc},material_description.ilike.${sc},manufacturer.ilike.${sc},part_number.ilike.${sc})`;
+        }
+        const rows = await supabaseRequest(q) || [];
+        return {
+          success: true,
+          data: name === 'getMaterialMaster' ? rows : { rows, page: p, pageSize: ps }
+        };
+      }
+
+      case 'uploadMaterials':
+      case 'uploadMasterData': {
+        const [rows = [], fileName = ''] = args;
+        if (!rows.length) throw new Error('Data upload kosong.');
+
+        // 1. Ambil seluruh material_code yang sudah ada di Supabase untuk deduplikasi
+        const existingCodesSet = new Set();
+        try {
+          const existingList = await supabaseRequest('material_raw?select=material_code&limit=50000');
+          if (Array.isArray(existingList)) {
+            existingList.forEach(item => {
+              if (item.material_code) existingCodesSet.add(String(item.material_code).trim().toUpperCase());
+            });
+          }
+        } catch (_) {}
+
+        let skippedDuplicates = 0;
+        const validToInsert = [];
+        const seenInFile = new Set();
+
+        rows.forEach((r, i) => {
+          const code = String(r.material_code || r.MATERIAL_CODE || r.Material_Code || '').trim();
+          const desc = String(r.material_description || r.MATERIAL_DESCRIPTION || r.Deskripsi || r.item_text_result || '').trim();
+          const mfr = String(r.manufacturer || r.MANUFACTURER || '').trim();
+          const pn = String(r.part_number || r.PART_NUMBER || '').trim();
+          const grp = String(r.material_group || r.MATERIAL_GROUP || 'GENERAL').trim().toUpperCase();
+          const uom = String(r.base_uom || r.BASE_UOM || 'EA').trim().toUpperCase();
+          const qty = parseFloat(r.stock_qty || r.STOCK_QTY || 0) || 0;
+          const val = parseFloat(r.stock_value || r.STOCK_VALUE || 0) || 0;
+
+          const finalCode = code || (pn ? `PN-${pn.replace(/[^a-zA-Z0-9]/g, '')}` : `MAT-${100000 + i + 1}`);
+          const upperCode = finalCode.toUpperCase();
+
+          // Jika kode material sudah ada di database atau duplikat dalam file, lewati (skip)
+          if (existingCodesSet.has(upperCode) || seenInFile.has(upperCode)) {
+            skippedDuplicates++;
+            return;
+          }
+
+          seenInFile.add(upperCode);
+          validToInsert.push({
+            material_code: finalCode,
+            material_description: desc,
+            manufacturer: mfr,
+            part_number: pn,
+            material_group: grp,
+            base_uom: uom,
+            stock_qty: qty,
+            stock_value: val
+          });
+        });
+
+        // 2. Simpan Riwayat Batch Upload
+        let batchId = null;
+        try {
+          const bRes = await supabaseRequest('upload_batch', {
+            method: 'POST',
+            body: [{
+              file_name: fileName || 'Upload_Master_' + new Date().toISOString().slice(0, 10),
+              total_records: rows.length,
+              uploaded_by: 'Direct User',
+              status: 'COMPLETED'
+            }]
+          });
+          if (Array.isArray(bRes) && bRes[0]) batchId = bRes[0].id;
+        } catch (_) {}
+
+        // 3. Masukkan hanya data baru (chunk 500)
+        const CHUNK = 500;
+        for (let i = 0; i < validToInsert.length; i += CHUNK) {
+          const chunk = validToInsert.slice(i, i + CHUNK);
+          if (batchId) {
+            chunk.forEach(c => c.batch_id = batchId);
+          }
+          await supabaseRequest('material_raw', {
+            method: 'POST',
+            prefer: 'return=minimal',
+            body: chunk
+          });
+        }
+
+        return {
+          success: true,
+          data: {
+            inserted: validToInsert.length,
+            skipped: skippedDuplicates,
+            errors: 0,
+            totalRows: rows.length
+          },
+          message: `Upload selesai: ${validToInsert.length} data baru ditambahkan, ${skippedDuplicates} data duplikat dilewati.`
+        };
+      }
+
+      case 'normalizeMaterial': {
+        const [materialId] = args;
+        const rows = await supabaseRequest(`material_raw?id=eq.${encodeURIComponent(materialId)}&select=*`);
+        if (!rows || !rows.length) throw new Error('Material tidak ditemukan.');
+        const m = rows[0];
+        const normDesc = String(m.material_description || '').trim().toUpperCase().replace(/\s+/g, ' ');
+        const res = await supabaseRequest('material_normalized', {
+          method: 'POST',
+          body: [{
+            raw_material_id: m.id,
+            normalized_description: normDesc,
+            normalized_brand: String(m.manufacturer || '').trim().toUpperCase(),
+            normalized_part_number: String(m.part_number || '').trim().toUpperCase(),
+            normalization_status: 'COMPLETED'
+          }]
+        });
+        return { success: true, data: res ? res[0] : { normalized_description: normDesc }, message: 'Material berhasil dinormalisasi.' };
+      }
+
+      case 'getUploadHistory': {
+        const [limit = 20] = args;
+        const limitNum = Math.min(100, Number(limit) || 20);
+        const rows = await supabaseRequest(`upload_batch?select=*&order=created_at.desc&limit=${limitNum}`).catch(() => []);
+        return { success: true, data: rows || [] };
+      }
+
+      case 'runAICleansingAnalysis':
+      case 'runAiCleansingAnalysis': {
+        const [minDup = 75, minSim = 60] = args;
+        const res = await supabaseRequest('rpc/run_material_cleansing_ai', {
+          method: 'POST',
+          body: { p_min_duplicate_score: Number(minDup) || 75, p_min_similarity_score: Number(minSim) || 60 }
+        });
+        return { success: true, data: res, message: (res && res.message) || 'Analisis AI selesai diproses.' };
+      }
+
+      case 'getDuplicateCandidates':
+      case 'getDuplicates': {
+        const limit = typeof args[0] === 'number' ? Math.min(300, Math.max(10, args[0])) : 300;
+        const rows = await supabaseRequest(`duplicate_analysis?select=*&order=duplicate_score.desc&limit=${limit}`);
+        return { success: true, data: rows || [] };
+      }
+
+      case 'saveDuplicateDecision': {
+        const [candidateId, decision, selectedMaster, notes, reviewerName] = args;
+        if (!candidateId) throw new Error('Candidate ID wajib diisi.');
+
+        const reviewer = reviewerName || 'admin';
+        const reviewedAt = new Date().toISOString();
+        const encodedId = encodeURIComponent(candidateId);
+
+        try {
+          await supabaseRequest(`duplicate_analysis?candidate_id=eq.${encodedId}`, {
+            method: 'PATCH',
+            body: {
+              review_status: decision,
+              recommended_master_code: selectedMaster || null,
+              assigned_reviewer: reviewer,
+              review_notes: notes || null,
+              reviewed_at: reviewedAt
+            }
+          });
+        } catch (patchErr) {
+          if (!/PGRST204|Could not find|does not exist/i.test(String(patchErr.message || patchErr))) {
+            throw patchErr;
+          }
+          let existingFactors = {};
+          try {
+            const cur = await supabaseRequest(`duplicate_analysis?candidate_id=eq.${encodedId}&select=match_factors&limit=1`);
+            if (cur && cur[0] && cur[0].match_factors && typeof cur[0].match_factors === 'object') {
+              existingFactors = cur[0].match_factors;
+            }
+          } catch (_) {}
+
+          await supabaseRequest(`duplicate_analysis?candidate_id=eq.${encodedId}`, {
+            method: 'PATCH',
+            body: {
+              review_status: decision,
+              recommended_master_code: selectedMaster || null,
+              match_factors: {
+                ...existingFactors,
+                assigned_reviewer: reviewer,
+                review_notes: notes || null,
+                reviewed_at: reviewedAt
+              }
+            }
+          });
+        }
+
+        if (decision === 'MERGE_AND_OBSOLETE' && selectedMaster) {
+          try {
+            await supabaseRequest(`material_raw?material_code=eq.${encodeURIComponent(selectedMaster)}`, {
+              method: 'PATCH',
+              body: { status: 'ACTIVE_GOLDEN' }
+            });
+          } catch (_) {}
+        }
+        return { success: true, message: 'Keputusan review berhasil disimpan.' };
+      }
+
+      case 'getSimilarMaterials': {
+        const [limit = 200] = args;
+        const rows = await supabaseRequest(`similar_material?order=similarity_score.desc&limit=${limit}`);
+        return { success: true, data: rows || [] };
+      }
+
+      case 'getUserManagementData': {
+        const [users, roles] = await Promise.all([
+          supabaseRequest('app_users?select=id,username,full_name,role,is_active,created_at&order=created_at.asc'),
+          supabaseRequest('app_role_permissions?select=*')
+        ]);
+        (roles || []).forEach(r => {
+          if (typeof r.allowed_menus === 'string') {
+            try { r.allowed_menus = JSON.parse(r.allowed_menus); } catch (_) {}
+          }
+        });
+        return { success: true, data: { users: users || [], roles: roles || [] } };
+      }
+
+      case 'saveRolePermissions': {
+        const [roleKey, allowedMenus, permissionsObj] = args;
+        if (!roleKey) throw new Error('Role key wajib diisi.');
+        const payload = {
+          role: roleKey,
+          allowed_menus: Array.isArray(allowedMenus) ? allowedMenus : [],
+          can_upload: Boolean(permissionsObj?.can_upload),
+          can_run_ai: Boolean(permissionsObj?.can_run_ai),
+          can_merge: Boolean(permissionsObj?.can_merge),
+          can_manage_settings: Boolean(permissionsObj?.can_manage_settings),
+          updated_at: new Date().toISOString()
+        };
+        await supabaseRequest(`app_role_permissions?role=eq.${encodeURIComponent(roleKey)}`, { method: 'PATCH', body: payload });
+        return { success: true, message: `Hak akses peran ${roleKey} berhasil disimpan.` };
+      }
+
+      case 'saveAppUser': {
+        const [userData] = args;
+        if (!userData || !userData.username) throw new Error('Username wajib diisi.');
+        const uName = userData.username.trim().toLowerCase();
+        const fullName = (userData.full_name || uName).trim();
+        const role = userData.role || 'OPERATOR';
+        const isActive = userData.is_active !== undefined ? Boolean(userData.is_active) : true;
+
+        if (userData.id) {
+          const patchData = { full_name: fullName, role: role, is_active: isActive };
+          if (userData.password) patchData.password_hash = await sha256Hex(userData.password);
+          await supabaseRequest(`app_users?id=eq.${userData.id}`, { method: 'PATCH', body: patchData });
+          return { success: true, message: `Pengguna ${uName} berhasil diperbarui.` };
+        } else {
+          if (!userData.password) throw new Error('Password wajib diisi untuk pengguna baru.');
+          const pHash = await sha256Hex(userData.password);
+          const newPayload = [{ username: uName, full_name: fullName, password_hash: pHash, role: role, is_active: isActive }];
+          const res = await supabaseRequest('app_users', { method: 'POST', body: newPayload });
+          return { success: true, data: res ? res[0] : null, message: `Pengguna ${uName} berhasil ditambahkan.` };
+        }
+      }
+
+      case 'deleteAppUser': {
+        const [userId, username] = args;
+        if (String(username).toLowerCase() === 'admin') throw new Error('Akun Administrator utama tidak boleh dihapus.');
+        await supabaseRequest(`app_users?id=eq.${userId}`, { method: 'DELETE' });
+        return { success: true, message: 'Pengguna berhasil dihapus.' };
+      }
+
+      case 'getApprovedDuplicatesReport': {
+        const [status = 'APPROVED_DUPLICATE'] = args;
+        let q = 'duplicate_analysis?order=potential_saving.desc,duplicate_score.desc&limit=500';
+        if (status === 'ALL_APPROVED') q += '&review_status=in.(APPROVED_DUPLICATE,MERGE_AND_OBSOLETE)';
+        else if (status) q += `&review_status=eq.${encodeURIComponent(status)}`;
+
+        const rows = await supabaseRequest(q) || [];
+        let totalSavings = 0;
+        let totalStockVal = 0;
+        let scoreSum = 0;
+        const clusters = new Set();
+
+        rows.forEach(r => {
+          const mf = (r.match_factors && typeof r.match_factors === 'object') ? r.match_factors : {};
+          if (!r.assigned_reviewer && mf.assigned_reviewer) r.assigned_reviewer = mf.assigned_reviewer;
+          if (!r.review_notes && mf.review_notes) r.review_notes = mf.review_notes;
+          if (!r.reviewed_at && mf.reviewed_at) r.reviewed_at = mf.reviewed_at;
+
+          totalSavings += Number(r.potential_saving) || 0;
+          totalStockVal += (Number(r.val_a) || 0) + (Number(r.val_b) || 0);
+          scoreSum += Number(r.duplicate_score) || 0;
+          if (r.cluster_id) clusters.add(r.cluster_id);
+        });
+
+        return {
+          success: true,
+          data: {
+            summary: {
+              totalApproved: rows.length,
+              totalPotentialSavings: totalSavings,
+              totalStockValue: totalStockVal,
+              avgDuplicateScore: rows.length ? parseFloat((scoreSum / rows.length).toFixed(1)) : 0,
+              clustersCount: clusters.size
+            },
+            items: rows
+          }
+        };
+      }
+
+      default:
+        throw new Error(`Aksi "${name}" belum didukung di Direct Supabase mode.`);
+    }
+  }
+
+  /**
+   * Fungsi sentral callServer untuk kompatibilitas penuh dengan seluruh kode antarmuka
+   */
+  window.callServer = async function(name, ...args) {
+    // 1. Lingkungan Asli Google Apps Script (didalam Web App iframe)
+    if (typeof google !== 'undefined' && google.script && google.script.run) {
+      return new Promise((resolve, reject) => {
+        google.script.run
+          .withSuccessHandler(r => {
+            if (r && r.success) resolve(r);
+            else reject(new Error(r?.message || 'Proses gagal.'));
+          })
+          .withFailureHandler(e => {
+            reject(new Error(e?.message || String(e)));
+          }).apiRequest(name, args, JSON.parse(sessionStorage.getItem('admin_session') || 'null')?.token || '');
+      });
+    }
+
+    // 2. Mode 'appscript' (Memanggil Google Apps Script Web App URL dari GitHub Pages)
+    const mode = (config.MODE || 'appscript').toLowerCase();
+    const gasUrl = getGasUrl();
+
+    if (mode === 'appscript' || mode === 'gas') {
+      if (gasUrl) {
+        return await callGasWebApi(name, args);
+      } else {
+        // A backend is required for server-side authorization.
+        throw new Error('Mode direct dinonaktifkan. Gunakan backend Apps Script atau API untuk validasi hak akses.');
+      }
+    }
+
+    // 3. Mode 'direct' (Langsung ke Supabase)
+    if (mode === 'direct') {
+      throw new Error('Mode direct dinonaktifkan. Gunakan backend Apps Script atau API untuk validasi hak akses.');
+    }
+
+    // 4. Mode 'api' (Backend Node.js Express)
+    try {
+      switch (name) {
+        case 'getSession': return await backendHttp('/auth/session');
+        case 'logoutUser': return await backendHttp('/auth/logout', { method: 'POST' });
+        case 'authorizeConsistencyExport': return await backendHttp('/consistency/export-authorization', { method: 'POST' });
+        case 'getConsistencyMaterials': return await backendHttp(`/consistency/materials?page=${Number(args[0]) || 1}&limit=${Number(args[1]) || 100}`);
+        case 'getAppStatus': return await backendHttp('/status');
+        case 'getDashboardData':
+        case 'getDashboardSummary': return await backendHttp('/materials/dashboard-summary');
+        case 'getMaterials':
+        case 'getMaterialMaster': {
+          const [page = 1, pageSize = 25, search = ''] = args;
+          return await backendHttp(`/materials?page=${page}&limit=${pageSize}&search=${encodeURIComponent(search)}`);
+        }
+        case 'uploadMaterials':
+        case 'uploadMasterData': {
+          const [rows = [], fileName = ''] = args;
+          return await backendHttp('/upload', { method: 'POST', body: JSON.stringify({ rows, fileName }) });
+        }
+        case 'normalizeMaterial': return await backendHttp(`/materials/${encodeURIComponent(args[0])}/normalize`, { method: 'POST', body: JSON.stringify({}) });
+        case 'getUploadHistory': return await backendHttp('/upload/history');
+        case 'runAICleansingAnalysis':
+        case 'runAiCleansingAnalysis': return await backendHttp('/duplicates/run-ai', { method: 'POST', body: JSON.stringify({}) });
+        case 'getDuplicateCandidates':
+        case 'getDuplicates': {
+          const limit = typeof args[0] === 'number' ? args[0] : 300;
+          return await backendHttp(`/duplicates?limit=${limit}`);
+        }
+        case 'saveDuplicateDecision': {
+          const [candidateId, decision, selectedMaster, notes, reviewerName] = args;
+          return await backendHttp('/duplicates/decision', {
+            method: 'POST',
+            body: JSON.stringify({ candidateId, decision, selectedMaster, notes, reviewerName })
+          });
+        }
+        case 'getSimilarMaterials': {
+          const [limit = 200] = args;
+          return await backendHttp(`/similarity?limit=${limit}`);
+        }
+        case 'loginUser': {
+          const [username, password] = args;
+          return await backendHttp('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) });
+        }
+        case 'getSystemAccessControl': return await backendHttp('/auth/access-control');
+        case 'getUserManagementData': return await backendHttp('/users');
+        case 'saveRolePermissions': {
+          const [roleKey, allowedMenus, permissionsObj] = args;
+          return await backendHttp('/users/permissions', { method: 'POST', body: JSON.stringify({ roleKey, allowedMenus, permissionsObj }) });
+        }
+        case 'saveAppUser': {
+          const [userData] = args;
+          return await backendHttp('/users', { method: 'POST', body: JSON.stringify({ userData }) });
+        }
+        case 'deleteAppUser': {
+          const [userId, username] = args;
+          return await backendHttp(`/users/${userId}?username=${encodeURIComponent(username || '')}`, { method: 'DELETE' });
+        }
+        case 'setupSupabaseConfig': {
+          const [url, key] = args;
+          return await backendHttp('/settings/supabase', { method: 'POST', body: JSON.stringify({ url, key }) });
+        }
+        case 'testSupabaseConnection': return await backendHttp('/settings/test-connection');
+        case 'getApprovedDuplicatesReport': {
+          const [status = 'APPROVED_DUPLICATE'] = args;
+          return await backendHttp(`/reports/approved-duplicates?status=${encodeURIComponent(status)}`);
+        }
+        default:
+          throw new Error(`Endpoint untuk aksi "${name}" tidak ditemukan.`);
+      }
+    } catch (err) {
+      throw err;
+    }
+  };
+})();
+
+;
+/**
+ * Katalog Standar Kamus Singkatan & Aturan Template TEL SCS (NATO & MESC Aligned)
+ * Dihasilkan otomatis untuk modul Cek Konsistensi Data Material Master.
+ */
+window.CATALOG_RULES = {
+  ABBREVIATIONS: [
+  {
+    "abv": "-",
+    "full": "MINUS"
+  },
+  {
+    "abv": "%",
+    "full": "PERCENT"
+  },
+  {
+    "abv": "&",
+    "full": "AMPERSAND"
+  },
+  {
+    "abv": "*",
+    "full": "TIMES"
+  },
+  {
+    "abv": "/",
+    "full": "PER"
+  },
+  {
+    "abv": "~",
+    "full": "RANGE SYMBOL"
+  },
+  {
+    "abv": "+",
+    "full": "PLUS"
+  },
+  {
+    "abv": "10TH",
+    "full": "TENTH"
+  },
+  {
+    "abv": "1ST",
+    "full": "FIRST"
+  },
+  {
+    "abv": "2ND",
+    "full": "SECOND AS IN SECOND ROW SECOND STAGE"
+  },
+  {
+    "abv": "3RD",
+    "full": "THIRD AS IN THIRD STAGE"
+  },
+  {
+    "abv": "4PDT",
+    "full": "FOUR POLE DOUBLE THROW"
+  },
+  {
+    "abv": "4TH",
+    "full": "FORTH AS IN FORTH ROW"
+  },
+  {
+    "abv": "5TH",
+    "full": "FIFTH"
+  },
+  {
+    "abv": "6TH",
+    "full": "SIXTH"
+  },
+  {
+    "abv": "8TH",
+    "full": "EIGHTH"
+  },
+  {
+    "abv": "9TH",
+    "full": "NINTH"
+  },
+  {
+    "abv": "A",
+    "full": "AMPERE"
+  },
+  {
+    "abv": "A/C",
+    "full": "ANGULAR CONTACT"
+  },
+  {
+    "abv": "A/D",
+    "full": "ANALOG TO DIGITAL"
+  },
+  {
+    "abv": "A/HR",
+    "full": "AMP HOUR"
+  },
+  {
+    "abv": "A/I",
+    "full": "ANALOG INPUT"
+  },
+  {
+    "abv": "A/O",
+    "full": "ANALOG OUTPUT"
+  },
+  {
+    "abv": "ABEC",
+    "full": "ANNULAR BEARING ENGINEERING COMMITTEE"
+  },
+  {
+    "abv": "ABS",
+    "full": "ACRYLONITRILE BUTADIENE STYRENE"
+  },
+  {
+    "abv": "AC",
+    "full": "ALTERNATING CURRENT"
+  },
+  {
+    "abv": "ACSR",
+    "full": "ALUMINIUM CONDUCTOR STEEL REINFORCED"
+  },
+  {
+    "abv": "AF",
+    "full": "ACROSS FLATS"
+  },
+  {
+    "abv": "AFBMA",
+    "full": "ANTI-FRICTION BEARING MANUFACTURERS ASSOC"
+  },
+  {
+    "abv": "AFNOR",
+    "full": "ASSOCIATION FRANCAISE DE NORMALISATION"
+  },
+  {
+    "abv": "AIP",
+    "full": "ANALOG INPUT PROCESSOR"
+  },
+  {
+    "abv": "AISI",
+    "full": "AMERICAN IRON & STEEL INSTITUTE"
+  },
+  {
+    "abv": "AL",
+    "full": "ALUMINIUM"
+  },
+  {
+    "abv": "AL2SO3",
+    "full": "ALUMINIUM SULPHITE"
+  },
+  {
+    "abv": "AL2SO4",
+    "full": "ALUMINIUM SULPHATE"
+  },
+  {
+    "abv": "AL-BRS",
+    "full": "ALUMINIUM-BRASS"
+  },
+  {
+    "abv": "AL-BRZ",
+    "full": "ALUMINIUM-BRONZE"
+  },
+  {
+    "abv": "ALOX",
+    "full": "ALUMINIUM OXIDE"
+  },
+  {
+    "abv": "AM",
+    "full": "AMPLITUDE MODULATED"
+  },
+  {
+    "abv": "AMB",
+    "full": "AMBIENT"
+  },
+  {
+    "abv": "AMP",
+    "full": "AMPLIFIED"
+  },
+  {
+    "abv": "ANCT",
+    "full": "AMERICAN NATIONAL COARSE THREAD"
+  },
+  {
+    "abv": "ANFO",
+    "full": "AMMONIUM NITRATE FUEL OIL"
+  },
+  {
+    "abv": "ANG",
+    "full": "ANGLE"
+  },
+  {
+    "abv": "ANL",
+    "full": "ANALYSER"
+  },
+  {
+    "abv": "ANLG",
+    "full": "ANALOG"
+  },
+  {
+    "abv": "ANSI",
+    "full": "AMERICAN NATIONAL STANDARDS INSTITUTE"
+  },
+  {
+    "abv": "API",
+    "full": "AMERICAN PETROLEUM INSTITUTE"
+  },
+  {
+    "abv": "APPL",
+    "full": "APPLICABLE"
+  },
+  {
+    "abv": "APPRTS",
+    "full": "APPARATUS"
+  },
+  {
+    "abv": "APROX",
+    "full": "APPROXIMATE"
+  },
+  {
+    "abv": "AQS",
+    "full": "AQUEOUS"
+  },
+  {
+    "abv": "AR",
+    "full": "ANALYTICAL REAGENT"
+  },
+  {
+    "abv": "ARB",
+    "full": "ARBITRARY"
+  },
+  {
+    "abv": "AS",
+    "full": "AUSTRALIAN STANDARD"
+  },
+  {
+    "abv": "ASA",
+    "full": "ALUMINIUM STRIP ARMOR"
+  },
+  {
+    "abv": "ASME",
+    "full": "AMERICAN SOCIETY OF MECHANICAL ENGINEERS"
+  },
+  {
+    "abv": "ASSOC",
+    "full": "ASSOCIATED"
+  },
+  {
+    "abv": "ASST",
+    "full": "ASSORTMENT"
+  },
+  {
+    "abv": "ASSTD",
+    "full": "ASSORTED"
+  },
+  {
+    "abv": "ASSY",
+    "full": "ASSEMBLIES"
+  },
+  {
+    "abv": "ASTM",
+    "full": "AMERICAN SOCIETY FOR TESTING MATERIALS"
+  },
+  {
+    "abv": "ATM",
+    "full": "ATMOSPHERES"
+  },
+  {
+    "abv": "ATTCH",
+    "full": "ATTACHMENT"
+  },
+  {
+    "abv": "AUTO",
+    "full": "AUTOMATIC"
+  },
+  {
+    "abv": "AUX",
+    "full": "AUXILIARY"
+  },
+  {
+    "abv": "AVR",
+    "full": "AUTOMATIC VOLTAGE REGULATOR"
+  },
+  {
+    "abv": "AWG",
+    "full": "AMERICAN WIRE GAUGE"
+  },
+  {
+    "abv": "B&W",
+    "full": "BLACK & WHITE"
+  },
+  {
+    "abv": "B/FLY",
+    "full": "BUTTERFLY"
+  },
+  {
+    "abv": "B/OFF",
+    "full": "BACK OFF"
+  },
+  {
+    "abv": "BA",
+    "full": "BRITISH ASSOCIATION SCREW THREAD"
+  },
+  {
+    "abv": "BC",
+    "full": "BAYONET CAP"
+  },
+  {
+    "abv": "BCC",
+    "full": "BRITISH COLOUR COUNCIL"
+  },
+  {
+    "abv": "B-COUP",
+    "full": "BUS COUPLER"
+  },
+  {
+    "abv": "BE",
+    "full": "BERYLLIUM"
+  },
+  {
+    "abv": "BHP",
+    "full": "BRAKE HORSEPOWER"
+  },
+  {
+    "abv": "BIL",
+    "full": "BASIC INSULATION LEVEL"
+  },
+  {
+    "abv": "BIO",
+    "full": "BIOLOGICAL"
+  },
+  {
+    "abv": "BKT",
+    "full": "BRACKET"
+  },
+  {
+    "abv": "BLDG",
+    "full": "BUILDING"
+  },
+  {
+    "abv": "BLK",
+    "full": "BLACK"
+  },
+  {
+    "abv": "BLKHD",
+    "full": "BULKHEAD"
+  },
+  {
+    "abv": "BLR",
+    "full": "BOILER"
+  },
+  {
+    "abv": "BLU",
+    "full": "BLUE"
+  },
+  {
+    "abv": "BOV",
+    "full": "BOVING"
+  },
+  {
+    "abv": "BP",
+    "full": "BOILING POINT"
+  },
+  {
+    "abv": "BPC",
+    "full": "BRITISH PHARMACEUTICAL CODEX"
+  },
+  {
+    "abv": "BPL",
+    "full": "BACK PLATE"
+  },
+  {
+    "abv": "BR",
+    "full": "BRONZE"
+  },
+  {
+    "abv": "BRG",
+    "full": "BEARING"
+  },
+  {
+    "abv": "BRK",
+    "full": "BRAKE"
+  },
+  {
+    "abv": "BRKG",
+    "full": "BREAKING"
+  },
+  {
+    "abv": "BRKR",
+    "full": "BREAKER"
+  },
+  {
+    "abv": "BRN",
+    "full": "BROWN"
+  },
+  {
+    "abv": "BROS",
+    "full": "BROTHERS"
+  },
+  {
+    "abv": "BRS",
+    "full": "BRASS"
+  },
+  {
+    "abv": "BRZ",
+    "full": "BRONZE"
+  },
+  {
+    "abv": "BS",
+    "full": "BRIGHT STEEL"
+  },
+  {
+    "abv": "BSC",
+    "full": "BRITISH STANDARD CYCLE THREAD"
+  },
+  {
+    "abv": "BSCON",
+    "full": "BRITISH STANDARD ELECTRICAL CONDUIT THREAD"
+  },
+  {
+    "abv": "BSF",
+    "full": "BRITISH STANDARD FINE THREAD"
+  },
+  {
+    "abv": "B-SIG",
+    "full": "BINARY SIGNALS"
+  },
+  {
+    "abv": "BSP",
+    "full": "BRITISH STANDARD PIPE THREAD"
+  },
+  {
+    "abv": "BSPP",
+    "full": "BRITISH STANDARD PIPE PARALLEL"
+  },
+  {
+    "abv": "BSPT",
+    "full": "BRITISH STANDARD PIPE TAPER"
+  },
+  {
+    "abv": "BST",
+    "full": "BRITISH STANDARD TABLE"
+  },
+  {
+    "abv": "B-STRG",
+    "full": "BREAKING STRENGTH"
+  },
+  {
+    "abv": "BSW",
+    "full": "BRITISH STANDARD WHITWORTH THREAD"
+  },
+  {
+    "abv": "BTL",
+    "full": "BOTTLE"
+  },
+  {
+    "abv": "BTM",
+    "full": "BOTTOM"
+  },
+  {
+    "abv": "BTU",
+    "full": "BRITISH THERMAL UNIT"
+  },
+  {
+    "abv": "BULL",
+    "full": "BULLETIN"
+  },
+  {
+    "abv": "BW",
+    "full": "BUTTWELD"
+  },
+  {
+    "abv": "BWG",
+    "full": "BIRMINGHAM IRON WIRE GAUGE"
+  },
+  {
+    "abv": "BX",
+    "full": "BOX"
+  },
+  {
+    "abv": "C",
+    "full": "CELCIUS"
+  },
+  {
+    "abv": "C/ANG",
+    "full": "CLEARANCE ANGLE"
+  },
+  {
+    "abv": "C/O",
+    "full": "CONSIST OF"
+  },
+  {
+    "abv": "C/W",
+    "full": "COMPLETE WITH"
+  },
+  {
+    "abv": "C/Z",
+    "full": "CARBON ZINC"
+  },
+  {
+    "abv": "C6H8O6",
+    "full": "ASCORBIC ACID"
+  },
+  {
+    "abv": "CADP",
+    "full": "CADMIUM PLATED"
+  },
+  {
+    "abv": "CAF",
+    "full": "COMPRESSED ASBESTOS FIBRE"
+  },
+  {
+    "abv": "CAL",
+    "full": "CALIBRATED"
+  },
+  {
+    "abv": "CAP",
+    "full": "CAPACITY"
+  },
+  {
+    "abv": "CARDBRD",
+    "full": "CARDBOARD"
+  },
+  {
+    "abv": "CART",
+    "full": "CARTRIDGE"
+  },
+  {
+    "abv": "CB",
+    "full": "CIRCUIT BREAKER"
+  },
+  {
+    "abv": "CC",
+    "full": "CUBIC CENTIMETER"
+  },
+  {
+    "abv": "CCA",
+    "full": "COLD CRANKING AMPS"
+  },
+  {
+    "abv": "CCT",
+    "full": "CIRCUIT"
+  },
+  {
+    "abv": "CCTV",
+    "full": "CLOSED CIRCUIT TELEVISION"
+  },
+  {
+    "abv": "CCW",
+    "full": "COUNTER CLOCKWISE"
+  },
+  {
+    "abv": "CD",
+    "full": "CANDELA"
+  },
+  {
+    "abv": "CDS",
+    "full": "COLD DRAWN SEAMLESS"
+  },
+  {
+    "abv": "CDW",
+    "full": "COLD DRAWN WELDED"
+  },
+  {
+    "abv": "CENT",
+    "full": "CENTRIFUGAL"
+  },
+  {
+    "abv": "CER",
+    "full": "CERAMIC"
+  },
+  {
+    "abv": "CERT",
+    "full": "CERTIFICATE"
+  },
+  {
+    "abv": "CES",
+    "full": "CANDELABRA EDISON SCREW"
+  },
+  {
+    "abv": "CEW",
+    "full": "COLD DRAWN ELECTRIC WELDED"
+  },
+  {
+    "abv": "CFH",
+    "full": "CUBIC FEET PER HOUR"
+  },
+  {
+    "abv": "CFM",
+    "full": "CUBIC FEET PER MINUTE"
+  },
+  {
+    "abv": "CFS",
+    "full": "CUBIC FEET PER SECOND"
+  },
+  {
+    "abv": "CFW",
+    "full": "COLD FINISHED WELDED"
+  },
+  {
+    "abv": "CH",
+    "full": "CHANNEL"
+  },
+  {
+    "abv": "CH HD",
+    "full": "CHEESE HEAD"
+  },
+  {
+    "abv": "CH3OH",
+    "full": "METHANOL"
+  },
+  {
+    "abv": "CH4",
+    "full": "METHANE"
+  },
+  {
+    "abv": "CHEM",
+    "full": "CHEMICAL"
+  },
+  {
+    "abv": "CI",
+    "full": "CAST IRON"
+  },
+  {
+    "abv": "CIRC",
+    "full": "CIRCUMFERENCE"
+  },
+  {
+    "abv": "CL",
+    "full": "CENTILITER"
+  },
+  {
+    "abv": "CL2",
+    "full": "CHLORINE"
+  },
+  {
+    "abv": "CLR",
+    "full": "CLEAR"
+  },
+  {
+    "abv": "CLS",
+    "full": "CLASS"
+  },
+  {
+    "abv": "CM",
+    "full": "CENTIMETER"
+  },
+  {
+    "abv": "CM2",
+    "full": "SQUARE CENTIMETER"
+  },
+  {
+    "abv": "CMPTR",
+    "full": "COMPUTER"
+  },
+  {
+    "abv": "CMS",
+    "full": "CENTIMETER PER SECOND"
+  },
+  {
+    "abv": "CNAF",
+    "full": "COMPRESSED NON ASBESTOS FIBRE"
+  },
+  {
+    "abv": "CO2",
+    "full": "CARBON DIOXIDE"
+  },
+  {
+    "abv": "COA",
+    "full": "CERTIFICATE OF ANALYSIS"
+  },
+  {
+    "abv": "COEF",
+    "full": "COEFFICIENT"
+  },
+  {
+    "abv": "COLRMTR",
+    "full": "COLORIMETER"
+  },
+  {
+    "abv": "COM",
+    "full": "COMMERCIAL"
+  },
+  {
+    "abv": "COMB",
+    "full": "COMBINATION"
+  },
+  {
+    "abv": "COMMS",
+    "full": "COMMUNICATION"
+  },
+  {
+    "abv": "COMP",
+    "full": "COMPOSITION"
+  },
+  {
+    "abv": "COMPD",
+    "full": "COMPRESSED"
+  },
+  {
+    "abv": "COMPL",
+    "full": "COMPLIANCE"
+  },
+  {
+    "abv": "COMPMT",
+    "full": "COMPARTMENT"
+  },
+  {
+    "abv": "COMPR",
+    "full": "COMPRESSOR"
+  },
+  {
+    "abv": "COMS",
+    "full": "COMMUNICATIONS"
+  },
+  {
+    "abv": "CONC",
+    "full": "CONCENTRATION"
+  },
+  {
+    "abv": "COND",
+    "full": "CONDUCTOR"
+  },
+  {
+    "abv": "CONDT",
+    "full": "CONDUIT"
+  },
+  {
+    "abv": "CONN",
+    "full": "CONNECTION"
+  },
+  {
+    "abv": "CONST",
+    "full": "CONSTRUCTION"
+  },
+  {
+    "abv": "CONT",
+    "full": "CONTACT"
+  },
+  {
+    "abv": "CONTR",
+    "full": "CONTACTOR"
+  },
+  {
+    "abv": "CONV",
+    "full": "CONVEYED"
+  },
+  {
+    "abv": "CONVR",
+    "full": "CONVERTED"
+  },
+  {
+    "abv": "CORP",
+    "full": "CORPORATION"
+  },
+  {
+    "abv": "CP",
+    "full": "CANDLE POWER"
+  },
+  {
+    "abv": "CPLG",
+    "full": "COUPLING"
+  },
+  {
+    "abv": "CPS",
+    "full": "CENTIPOISE"
+  },
+  {
+    "abv": "CPU",
+    "full": "CENTRAL PROCESSING UNIT"
+  },
+  {
+    "abv": "CPVC",
+    "full": "CHLORINATED POLYVINYL CHLORIDE"
+  },
+  {
+    "abv": "CR",
+    "full": "CHROME"
+  },
+  {
+    "abv": "CRC",
+    "full": "COLD ROLLED COMMERCIAL"
+  },
+  {
+    "abv": "CRD",
+    "full": "COLD ROLLED DEEP-DRAWING"
+  },
+  {
+    "abv": "CRE",
+    "full": "COLD ROLLED EXTRA DEEP-DRAWING"
+  },
+  {
+    "abv": "CRT",
+    "full": "CATHODE RAY TUBE"
+  },
+  {
+    "abv": "CS",
+    "full": "CARBON STEEL"
+  },
+  {
+    "abv": "CSG",
+    "full": "CASING"
+  },
+  {
+    "abv": "C-SIZE",
+    "full": "CHAIN SIZE"
+  },
+  {
+    "abv": "CSK",
+    "full": "COUNTERSINK"
+  },
+  {
+    "abv": "CSP",
+    "full": "CHLORO SULPHONATED POLYETHYLENE"
+  },
+  {
+    "abv": "CST",
+    "full": "CENTISTOKES"
+  },
+  {
+    "abv": "CTL",
+    "full": "CENTRAL"
+  },
+  {
+    "abv": "CTMP",
+    "full": "CHEMICAL THERMO MECHANICAL PULP"
+  },
+  {
+    "abv": "CTN",
+    "full": "CARTON"
+  },
+  {
+    "abv": "CTR",
+    "full": "CENTRE"
+  },
+  {
+    "abv": "CTRL",
+    "full": "CONTROL"
+  },
+  {
+    "abv": "CTRLR",
+    "full": "CONTROLLER"
+  },
+  {
+    "abv": "CTRS",
+    "full": "CENTRE TO CENTRE"
+  },
+  {
+    "abv": "CU",
+    "full": "COPPER"
+  },
+  {
+    "abv": "CUB",
+    "full": "CUBICLE"
+  },
+  {
+    "abv": "CU-CU",
+    "full": "COPPER TO COPPER"
+  },
+  {
+    "abv": "CW",
+    "full": "CLOCKWISE"
+  },
+  {
+    "abv": "CWT",
+    "full": "HUNDREDWEIGHT"
+  },
+  {
+    "abv": "CYL",
+    "full": "CYLINDER"
+  },
+  {
+    "abv": "D",
+    "full": "DEPTH"
+  },
+  {
+    "abv": "D/A",
+    "full": "DIGITAL TO ANALOG"
+  },
+  {
+    "abv": "D/I",
+    "full": "DIGITAL INPUT"
+  },
+  {
+    "abv": "D/O",
+    "full": "DIGITAL OUTPUT"
+  },
+  {
+    "abv": "DAC",
+    "full": "DIGITAL TO ANALOG CONVERTER"
+  },
+  {
+    "abv": "DATA PROC",
+    "full": "DATA PROCESSING"
+  },
+  {
+    "abv": "DB",
+    "full": "DECIBEL"
+  },
+  {
+    "abv": "DBL",
+    "full": "DOUBLE"
+  },
+  {
+    "abv": "DC",
+    "full": "DIRECT CURRENT"
+  },
+  {
+    "abv": "DE",
+    "full": "DRIVE END"
+  },
+  {
+    "abv": "DEG",
+    "full": "DEGREE"
+  },
+  {
+    "abv": "DEMIN",
+    "full": "DEMINERALISER"
+  },
+  {
+    "abv": "DEPT",
+    "full": "DEPARTMENT"
+  },
+  {
+    "abv": "DESC",
+    "full": "DESCRIPTION"
+  },
+  {
+    "abv": "DG",
+    "full": "DEEP GROOVE"
+  },
+  {
+    "abv": "DGTL",
+    "full": "DIGITAL"
+  },
+  {
+    "abv": "DIA",
+    "full": "DIAMETER"
+  },
+  {
+    "abv": "DIAPH",
+    "full": "DIAPHRAGM"
+  },
+  {
+    "abv": "DIFF",
+    "full": "DIFFERENTIAL"
+  },
+  {
+    "abv": "DIL",
+    "full": "DUAL IN LINE"
+  },
+  {
+    "abv": "DIN",
+    "full": "DEUTSCHE INSTITUT FUR NORMUNG"
+  },
+  {
+    "abv": "DIP",
+    "full": "DUAL IN LINE PACKAGE"
+  },
+  {
+    "abv": "DIR",
+    "full": "DIRECT"
+  },
+  {
+    "abv": "DIRNL",
+    "full": "DIRECTIONAL"
+  },
+  {
+    "abv": "DISCH",
+    "full": "DISCHARGE"
+  },
+  {
+    "abv": "DISP",
+    "full": "DISPOSABLE"
+  },
+  {
+    "abv": "DISPLC",
+    "full": "DISPLACEMENT"
+  },
+  {
+    "abv": "DIST",
+    "full": "DISTRIBUTING"
+  },
+  {
+    "abv": "DIV",
+    "full": "DIVISION"
+  },
+  {
+    "abv": "DK",
+    "full": "DARK"
+  },
+  {
+    "abv": "DL",
+    "full": "DECILITER"
+  },
+  {
+    "abv": "DM",
+    "full": "DECIMETER"
+  },
+  {
+    "abv": "DOC",
+    "full": "DOCUMENT"
+  },
+  {
+    "abv": "DOCS",
+    "full": "DOCUMENTS"
+  },
+  {
+    "abv": "DOL",
+    "full": "DIRECT ON LINE"
+  },
+  {
+    "abv": "DOP",
+    "full": "DIGITAL OUTPUT PROCESSOR"
+  },
+  {
+    "abv": "DOZ",
+    "full": "DOZEN"
+  },
+  {
+    "abv": "DP",
+    "full": "DIAMETRIC PITCH"
+  },
+  {
+    "abv": "DP3T",
+    "full": "DOUBLE POLE TRIPLE THROW"
+  },
+  {
+    "abv": "DP6T",
+    "full": "DOUBLE POLE SIX THROW"
+  },
+  {
+    "abv": "DPDT",
+    "full": "DOUBLE POLE DOUBLE THROW"
+  },
+  {
+    "abv": "DPO",
+    "full": "DIGITAL PROCESS OUTPUT"
+  },
+  {
+    "abv": "DPST",
+    "full": "DOUBLE POLE SINGLE THROW"
+  },
+  {
+    "abv": "DR",
+    "full": "DRUM"
+  },
+  {
+    "abv": "DRV",
+    "full": "DRIVE"
+  },
+  {
+    "abv": "DRVG",
+    "full": "DRIVING"
+  },
+  {
+    "abv": "DRVN",
+    "full": "DRIVEN"
+  },
+  {
+    "abv": "DSDD",
+    "full": "DOUBLE SIDED DOUBLE DENSITY"
+  },
+  {
+    "abv": "DSEHD",
+    "full": "DOUBLE SIDED EXTRA HIGH DENSITY"
+  },
+  {
+    "abv": "DSHD",
+    "full": "DOUBLE SIDED HIGH DENSITY"
+  },
+  {
+    "abv": "DSL",
+    "full": "DIESEL"
+  },
+  {
+    "abv": "DUP",
+    "full": "DUPLEX"
+  },
+  {
+    "abv": "DURO",
+    "full": "DUROMETER"
+  },
+  {
+    "abv": "DWG",
+    "full": "DRAWING NUMBER"
+  },
+  {
+    "abv": "DWR",
+    "full": "DRAWER"
+  },
+  {
+    "abv": "DWV",
+    "full": "DRAIN WASTE VENT"
+  },
+  {
+    "abv": "E",
+    "full": "EARTH"
+  },
+  {
+    "abv": "E/L",
+    "full": "EARTH LEAKAGE"
+  },
+  {
+    "abv": "EA",
+    "full": "EACH"
+  },
+  {
+    "abv": "EBF",
+    "full": "ESTIMATED BREAKING FORCE"
+  },
+  {
+    "abv": "ECC",
+    "full": "ECCENTRIC"
+  },
+  {
+    "abv": "ECON",
+    "full": "ECONOMISER"
+  },
+  {
+    "abv": "EFI",
+    "full": "ELECTRONIC FUEL INJECTION"
+  },
+  {
+    "abv": "EHP",
+    "full": "EXTRA HIGH PRESSURE"
+  },
+  {
+    "abv": "EHT",
+    "full": "EXTRA HIGH TENSILE"
+  },
+  {
+    "abv": "ELEC",
+    "full": "ELECTRIC"
+  },
+  {
+    "abv": "ELECPNEU",
+    "full": "ELECTROPNEUMATIC"
+  },
+  {
+    "abv": "ELECTROMAG",
+    "full": "ELECTROMAGNETIC"
+  },
+  {
+    "abv": "ELMT",
+    "full": "ELEMENT"
+  },
+  {
+    "abv": "ELTR",
+    "full": "ELECTRODE"
+  },
+  {
+    "abv": "ELTRNC",
+    "full": "ELECTRONIC"
+  },
+  {
+    "abv": "EMF",
+    "full": "ELECTROMOTIVE FORCE"
+  },
+  {
+    "abv": "ENC",
+    "full": "ENCASED"
+  },
+  {
+    "abv": "ENCL",
+    "full": "ENCLOSED"
+  },
+  {
+    "abv": "ENG",
+    "full": "ENGINE"
+  },
+  {
+    "abv": "ENGRS",
+    "full": "ENGINEERS"
+  },
+  {
+    "abv": "EP",
+    "full": "ETHYLENE PROPYLENE"
+  },
+  {
+    "abv": "EPA",
+    "full": "ENVIRONMENTAL PROTECTION AGENCY"
+  },
+  {
+    "abv": "EPDM",
+    "full": "ETHYLENE PROPYLENE DIENE MODIFIED"
+  },
+  {
+    "abv": "EPIRB",
+    "full": "EMERGENCY POSITION INDICATING RADIO BEACON"
+  },
+  {
+    "abv": "EPNS",
+    "full": "ELECTROPLATED NICKEL SILVER"
+  },
+  {
+    "abv": "EPR",
+    "full": "ETHYLENE PROPYLENE RUBBER"
+  },
+  {
+    "abv": "EPROM",
+    "full": "ELECTRICALLY PROGRAMMABLE READ ONLY MEMORY"
+  },
+  {
+    "abv": "EQUIP",
+    "full": "EQUIPMENT"
+  },
+  {
+    "abv": "EQUIV",
+    "full": "EQUIVALENT"
+  },
+  {
+    "abv": "ERW",
+    "full": "ELECTRIC RESISTANCE WELDING"
+  },
+  {
+    "abv": "ES",
+    "full": "EDISON SCREW"
+  },
+  {
+    "abv": "EXCL",
+    "full": "EXCLUDE"
+  },
+  {
+    "abv": "EXH",
+    "full": "EXHAUST"
+  },
+  {
+    "abv": "EXP",
+    "full": "EXPAND"
+  },
+  {
+    "abv": "EXPR",
+    "full": "EXPANDER"
+  },
+  {
+    "abv": "EXT",
+    "full": "EXTERNAL"
+  },
+  {
+    "abv": "EXTD",
+    "full": "EXTENDED"
+  },
+  {
+    "abv": "EXTG",
+    "full": "EXTINGUISHING"
+  },
+  {
+    "abv": "EXTN",
+    "full": "EXTENSION"
+  },
+  {
+    "abv": "EXTR",
+    "full": "EXTINGUISHER"
+  },
+  {
+    "abv": "F",
+    "full": "FAREINHEIT"
+  },
+  {
+    "abv": "F TO F",
+    "full": "FACE TO FACE"
+  },
+  {
+    "abv": "F&F",
+    "full": "FEMALE AND FEMALE"
+  },
+  {
+    "abv": "F/",
+    "full": "FOR"
+  },
+  {
+    "abv": "F/W",
+    "full": "FAST WIDE"
+  },
+  {
+    "abv": "FAX",
+    "full": "FACSIMILE"
+  },
+  {
+    "abv": "FBE",
+    "full": "FUSION BONDED EPOXY COATED"
+  },
+  {
+    "abv": "FCAN",
+    "full": "FULL CAPACITY ABOVE NOMINAL"
+  },
+  {
+    "abv": "FCBN",
+    "full": "FULL CAPACITY BELOW NOMINAL"
+  },
+  {
+    "abv": "FDD",
+    "full": "FLOPPY DISK DRIVE"
+  },
+  {
+    "abv": "FE",
+    "full": "IRON"
+  },
+  {
+    "abv": "FE2O3",
+    "full": "IRON OXIDE"
+  },
+  {
+    "abv": "FEPA",
+    "full": "FEDERATION OF EUROPEAN PRODUCERS OF ABRASIVES"
+  },
+  {
+    "abv": "FF",
+    "full": "FLAT FACE"
+  },
+  {
+    "abv": "FFS",
+    "full": "FIRE FIGHTING SYSTEM"
+  },
+  {
+    "abv": "FI",
+    "full": "FEMALE IRON"
+  },
+  {
+    "abv": "FIG",
+    "full": "FIGURE"
+  },
+  {
+    "abv": "FIL",
+    "full": "FILAMENT"
+  },
+  {
+    "abv": "FILT",
+    "full": "FILTER"
+  },
+  {
+    "abv": "FLEX",
+    "full": "FLEXIBLE"
+  },
+  {
+    "abv": "FLG",
+    "full": "FLANGE"
+  },
+  {
+    "abv": "FLOZ",
+    "full": "FLUID OUNCE"
+  },
+  {
+    "abv": "FLURO",
+    "full": "FLUORESCENT"
+  },
+  {
+    "abv": "FLWMTR",
+    "full": "FLOWMETER"
+  },
+  {
+    "abv": "FLWR",
+    "full": "FOLLOWER"
+  },
+  {
+    "abv": "FM",
+    "full": "FREQUENCY MODULATION"
+  },
+  {
+    "abv": "FO",
+    "full": "FIBRE OPTIC"
+  },
+  {
+    "abv": "FPT",
+    "full": "FEMALE PIPE THREAD"
+  },
+  {
+    "abv": "FREQ",
+    "full": "FREQUENCY"
+  },
+  {
+    "abv": "FRF",
+    "full": "FIRE RESISTANT FLUID"
+  },
+  {
+    "abv": "FRM",
+    "full": "FRAME"
+  },
+  {
+    "abv": "FRP",
+    "full": "FIBRE REINFORCED PLASTIC"
+  },
+  {
+    "abv": "FSD",
+    "full": "FULL SCALE DEFLECTION"
+  },
+  {
+    "abv": "FSK",
+    "full": "FREQUENCY SHIFT KEYING"
+  },
+  {
+    "abv": "FSV",
+    "full": "FORMATION SAVER VALVE"
+  },
+  {
+    "abv": "FT",
+    "full": "FEET"
+  },
+  {
+    "abv": "FT/MIN",
+    "full": "FEET PER MINUTE"
+  },
+  {
+    "abv": "FT/SEC",
+    "full": "FEET PER SECOND"
+  },
+  {
+    "abv": "FT2",
+    "full": "SQUARE FEET"
+  },
+  {
+    "abv": "FT3",
+    "full": "CUBIC FEET"
+  },
+  {
+    "abv": "FTG",
+    "full": "FITTING"
+  },
+  {
+    "abv": "FT-LB",
+    "full": "FOOT-POUND"
+  },
+  {
+    "abv": "FVNR",
+    "full": "FULL VOLTAGE NON-REVERSING"
+  },
+  {
+    "abv": "FVR",
+    "full": "FULL VOLTAGE REVERSING"
+  },
+  {
+    "abv": "FW",
+    "full": "FLAT WIDTH"
+  },
+  {
+    "abv": "FWF",
+    "full": "FIRM WHITE FELT"
+  },
+  {
+    "abv": "FXD",
+    "full": "FIXED"
+  },
+  {
+    "abv": "G/B",
+    "full": "GEARBOX"
+  },
+  {
+    "abv": "G/CC",
+    "full": "GRAMS PER CUBIC CENTIMETER"
+  },
+  {
+    "abv": "G/L",
+    "full": "GRAMS PER LITER"
+  },
+  {
+    "abv": "G/T",
+    "full": "GENERATOR TRANSFORMER"
+  },
+  {
+    "abv": "GA",
+    "full": "GAUGE"
+  },
+  {
+    "abv": "GAL",
+    "full": "GALLON"
+  },
+  {
+    "abv": "GALV",
+    "full": "GALVANIZE"
+  },
+  {
+    "abv": "GAS",
+    "full": "GASOLINE"
+  },
+  {
+    "abv": "GCB",
+    "full": "GAS CIRCUIT BREAKER"
+  },
+  {
+    "abv": "GDE",
+    "full": "GRADE"
+  },
+  {
+    "abv": "GEC",
+    "full": "GENERAL ELECTRIC CO"
+  },
+  {
+    "abv": "GEN",
+    "full": "GENERATOR"
+  },
+  {
+    "abv": "GEOCHEM",
+    "full": "GEOCHEMICAL"
+  },
+  {
+    "abv": "GES",
+    "full": "GOLIATH EDISON SCREW"
+  },
+  {
+    "abv": "GHZ",
+    "full": "GIGAHERTZ"
+  },
+  {
+    "abv": "GIS",
+    "full": "GAS INSULATED SWITCHGEAR"
+  },
+  {
+    "abv": "GL",
+    "full": "GIGALITER"
+  },
+  {
+    "abv": "GM",
+    "full": "GRAM"
+  },
+  {
+    "abv": "GOV",
+    "full": "GOVERNOR"
+  },
+  {
+    "abv": "GOVT",
+    "full": "GOVERNMENT"
+  },
+  {
+    "abv": "GP",
+    "full": "GENERAL PURPOSE"
+  },
+  {
+    "abv": "GPD",
+    "full": "GALLONS PER DAY"
+  },
+  {
+    "abv": "GPH",
+    "full": "GALLONS PER HOUR"
+  },
+  {
+    "abv": "GPM",
+    "full": "GALLONS PER MINUTE"
+  },
+  {
+    "abv": "GRAD",
+    "full": "GRADUATION"
+  },
+  {
+    "abv": "GRAN",
+    "full": "GRANULATED"
+  },
+  {
+    "abv": "GRN",
+    "full": "GREEN"
+  },
+  {
+    "abv": "GRP",
+    "full": "GROUP"
+  },
+  {
+    "abv": "GRV",
+    "full": "GROOVE"
+  },
+  {
+    "abv": "GRY",
+    "full": "GRAY"
+  },
+  {
+    "abv": "GSM",
+    "full": "GRAMS PER SQUARE METER"
+  },
+  {
+    "abv": "GSWA",
+    "full": "GALVANISED STEEL WIRE ARMOURED"
+  },
+  {
+    "abv": "GSWB",
+    "full": "GALVANISED STEEL WIRE BRAIDED"
+  },
+  {
+    "abv": "GTO",
+    "full": "GATE TURN OFF"
+  },
+  {
+    "abv": "H",
+    "full": "HEIGHT"
+  },
+  {
+    "abv": "H/D",
+    "full": "HEAVY DUTY"
+  },
+  {
+    "abv": "H2",
+    "full": "HYDROGEN"
+  },
+  {
+    "abv": "H2O2",
+    "full": "HYDROGEN PEROXIDE"
+  },
+  {
+    "abv": "H2S",
+    "full": "HYDROGEN SULPHIDE"
+  },
+  {
+    "abv": "H2SO3",
+    "full": "SULPHUROUS ACID"
+  },
+  {
+    "abv": "H2SO4",
+    "full": "SULPHURIC ACID"
+  },
+  {
+    "abv": "HA",
+    "full": "HECTARE"
+  },
+  {
+    "abv": "HAZ",
+    "full": "HAZARD"
+  },
+  {
+    "abv": "HAZCHEM",
+    "full": "HAZARDOUS CHEMICAL"
+  },
+  {
+    "abv": "HBC",
+    "full": "HIGH BREAKING CAPACITY"
+  },
+  {
+    "abv": "HD",
+    "full": "HEAD"
+  },
+  {
+    "abv": "HDD",
+    "full": "HARD DISK DRIVE"
+  },
+  {
+    "abv": "HDED",
+    "full": "HEADED"
+  },
+  {
+    "abv": "HDLS",
+    "full": "HEADLESS"
+  },
+  {
+    "abv": "HDLT",
+    "full": "HEADLIGHT"
+  },
+  {
+    "abv": "HDPE",
+    "full": "HIGH DENSITY POLYETHYLENE"
+  },
+  {
+    "abv": "HDWR",
+    "full": "HEADWEAR"
+  },
+  {
+    "abv": "HE",
+    "full": "HELIUM"
+  },
+  {
+    "abv": "HEL",
+    "full": "HELICAL"
+  },
+  {
+    "abv": "HEX",
+    "full": "HEXAGON"
+  },
+  {
+    "abv": "HF",
+    "full": "HIGH FREQUENCY"
+  },
+  {
+    "abv": "HFS",
+    "full": "HOT FINISHED SEAMLESS"
+  },
+  {
+    "abv": "HG",
+    "full": "MERCURY"
+  },
+  {
+    "abv": "HLAIP",
+    "full": "HIGH LEVEL ANALOG INPUT"
+  },
+  {
+    "abv": "HNBR",
+    "full": "HYDROGENATED NITRILE BUTADIENE"
+  },
+  {
+    "abv": "HNDLG",
+    "full": "HANDLING"
+  },
+  {
+    "abv": "HORIZ",
+    "full": "HORIZONTAL"
+  },
+  {
+    "abv": "HP",
+    "full": "HIGH PRESSURE"
+  },
+  {
+    "abv": "HPGR",
+    "full": "HIGH PRESSURE GRINDING ROLLERS"
+  },
+  {
+    "abv": "HPS",
+    "full": "HIGH PRESSURE SODIUM"
+  },
+  {
+    "abv": "HR",
+    "full": "HOUR"
+  },
+  {
+    "abv": "HRC",
+    "full": "HIGH RUPTURE CAPACITY"
+  },
+  {
+    "abv": "HRES",
+    "full": "HIGH RESOLUTION"
+  },
+  {
+    "abv": "HRL",
+    "full": "HARD RUBBER LINED"
+  },
+  {
+    "abv": "HSC",
+    "full": "HIGH SPEED COUNTER"
+  },
+  {
+    "abv": "HSG",
+    "full": "HOUSING"
+  },
+  {
+    "abv": "HSGT",
+    "full": "HIGH SPEED GROUND THREAD"
+  },
+  {
+    "abv": "HSS",
+    "full": "HIGH SPEED STEEL"
+  },
+  {
+    "abv": "HT",
+    "full": "HIGH TENSION"
+  },
+  {
+    "abv": "HTEMP",
+    "full": "HIGH TEMPERATURE"
+  },
+  {
+    "abv": "H-TEN",
+    "full": "HIGH-TENSILE"
+  },
+  {
+    "abv": "HTR",
+    "full": "HEATER"
+  },
+  {
+    "abv": "HUM",
+    "full": "HUMIDITY"
+  },
+  {
+    "abv": "HV",
+    "full": "HIGH VOLTAGE"
+  },
+  {
+    "abv": "HVIS",
+    "full": "HIGH VISIBILITY"
+  },
+  {
+    "abv": "HVY",
+    "full": "HEAVY"
+  },
+  {
+    "abv": "HWY",
+    "full": "HIGHWAY"
+  },
+  {
+    "abv": "HXPL",
+    "full": "HIGH EXPLOSIVE"
+  },
+  {
+    "abv": "HYD",
+    "full": "HYDRAULIC"
+  },
+  {
+    "abv": "HZ",
+    "full": "HERTZ"
+  },
+  {
+    "abv": "I",
+    "full": "CURRENT"
+  },
+  {
+    "abv": "I/F",
+    "full": "INTERFACE"
+  },
+  {
+    "abv": "I/O",
+    "full": "INPUT OUTPUT"
+  },
+  {
+    "abv": "I/P",
+    "full": "INPUT"
+  },
+  {
+    "abv": "IC",
+    "full": "INSIDE CIRCUMFERENCE"
+  },
+  {
+    "abv": "ICB",
+    "full": "IC BOARD"
+  },
+  {
+    "abv": "ID",
+    "full": "INNER DIAMETER"
+  },
+  {
+    "abv": "IES",
+    "full": "INTERMEDIATE EDISON SCREW"
+  },
+  {
+    "abv": "IF",
+    "full": "INTERMEDIATE FREQUENCY"
+  },
+  {
+    "abv": "IGBT",
+    "full": "INTEGRATED GATE BIPOLAR TRANSISTOR"
+  },
+  {
+    "abv": "IGN",
+    "full": "IGNITION"
+  },
+  {
+    "abv": "IGPH",
+    "full": "IMPERIAL GALLONS PER HOUR"
+  },
+  {
+    "abv": "IGPM",
+    "full": "IMPERIAL GALLONS PER MINUTE"
+  },
+  {
+    "abv": "IMM",
+    "full": "IMMERSION"
+  },
+  {
+    "abv": "IMP",
+    "full": "IMPELLER"
+  },
+  {
+    "abv": "IN",
+    "full": "INCHI"
+  },
+  {
+    "abv": "IN/MIN",
+    "full": "INCH PER MINUTE"
+  },
+  {
+    "abv": "IN2",
+    "full": "SQUARE INCH"
+  },
+  {
+    "abv": "IN3",
+    "full": "CUBIC INCH"
+  },
+  {
+    "abv": "IN3/MIN",
+    "full": "CUBIC INCH PER MINUTE"
+  },
+  {
+    "abv": "INCAND",
+    "full": "INCANDESCENT"
+  },
+  {
+    "abv": "INCL",
+    "full": "INCLUDE"
+  },
+  {
+    "abv": "INCR",
+    "full": "INCREASE"
+  },
+  {
+    "abv": "IND",
+    "full": "INDICATE"
+  },
+  {
+    "abv": "INDIR",
+    "full": "INDIRECT"
+  },
+  {
+    "abv": "INDUCT",
+    "full": "INDUCT"
+  },
+  {
+    "abv": "INDUST",
+    "full": "INDUSTRIAL"
+  },
+  {
+    "abv": "INHIB",
+    "full": "INHIBITED"
+  },
+  {
+    "abv": "INJ",
+    "full": "INJECTION"
+  },
+  {
+    "abv": "IN-LB",
+    "full": "INCH-POUND"
+  },
+  {
+    "abv": "INSPN",
+    "full": "INSPECTION"
+  },
+  {
+    "abv": "INST",
+    "full": "INSTRUMENT"
+  },
+  {
+    "abv": "INSTALL",
+    "full": "INSTALLATION"
+  },
+  {
+    "abv": "INSUL",
+    "full": "INSULATE"
+  },
+  {
+    "abv": "INSULD",
+    "full": "INSULATED"
+  },
+  {
+    "abv": "INSULG",
+    "full": "INSULATING"
+  },
+  {
+    "abv": "INSULN",
+    "full": "INSULATION"
+  },
+  {
+    "abv": "INSULR",
+    "full": "INSULATOR"
+  },
+  {
+    "abv": "INT",
+    "full": "INTERNAL"
+  },
+  {
+    "abv": "INTER",
+    "full": "INTERMEDIATE"
+  },
+  {
+    "abv": "INVTR",
+    "full": "INVERTER"
+  },
+  {
+    "abv": "I-O/P",
+    "full": "CURRENT OUTPUT"
+  },
+  {
+    "abv": "IR",
+    "full": "INFRARED"
+  },
+  {
+    "abv": "IRHD",
+    "full": "INTERNATIONAL RUBBER HARDNESS DEGREE"
+  },
+  {
+    "abv": "I-RTG",
+    "full": "CURRENT RATING"
+  },
+  {
+    "abv": "ISFET",
+    "full": "ION SELECTIVE FIELD EFFECT TRANSISTOR"
+  },
+  {
+    "abv": "ISM",
+    "full": "INTELLIGENT SUPPORT MODULE"
+  },
+  {
+    "abv": "ISO",
+    "full": "INTERNATIONAL STANDARDS ORGANISATION"
+  },
+  {
+    "abv": "ISOL",
+    "full": "ISOLATING"
+  },
+  {
+    "abv": "I-V",
+    "full": "CURRENT TO VOLTAGE"
+  },
+  {
+    "abv": "IWRC",
+    "full": "INDEPENDENT WIRE ROPE CORE"
+  },
+  {
+    "abv": "J",
+    "full": "JOULE"
+  },
+  {
+    "abv": "J/B",
+    "full": "JUNCTION BOX"
+  },
+  {
+    "abv": "JEDEC",
+    "full": "JOINT ELECTRON DEVICE ENGINEERING COUNCIL"
+  },
+  {
+    "abv": "JFET",
+    "full": "JUNCTION FIELD EFFECT TRANSISTOR"
+  },
+  {
+    "abv": "JIC",
+    "full": "JOINT INDUSTRIES CONFERENCE THREAD"
+  },
+  {
+    "abv": "JKT",
+    "full": "JACKET"
+  },
+  {
+    "abv": "JUNCT",
+    "full": "JUNCTION"
+  },
+  {
+    "abv": "JWLR",
+    "full": "JEWELLER"
+  },
+  {
+    "abv": "K",
+    "full": "KILO"
+  },
+  {
+    "abv": "K OHM",
+    "full": "KILOHM"
+  },
+  {
+    "abv": "KA",
+    "full": "KILOAMPERE"
+  },
+  {
+    "abv": "KB",
+    "full": "KILOBYTE"
+  },
+  {
+    "abv": "KCL",
+    "full": "POTASSIUM CHLORIDE"
+  },
+  {
+    "abv": "KD",
+    "full": "KILN DRIED"
+  },
+  {
+    "abv": "KERO",
+    "full": "KEROSENE"
+  },
+  {
+    "abv": "KG",
+    "full": "KILOGRAM"
+  },
+  {
+    "abv": "KHZ",
+    "full": "KILOHERTZ"
+  },
+  {
+    "abv": "KJ",
+    "full": "KILOJOULE"
+  },
+  {
+    "abv": "KM",
+    "full": "KILOMETER"
+  },
+  {
+    "abv": "KN",
+    "full": "KILONEWTON"
+  },
+  {
+    "abv": "KOH/G",
+    "full": "POTASSIUM HYDROXIDE PER GRAM"
+  },
+  {
+    "abv": "KPA",
+    "full": "KILOPASCAL"
+  },
+  {
+    "abv": "KPH",
+    "full": "KILOMETERS PER HOUR"
+  },
+  {
+    "abv": "KV",
+    "full": "KILOVOLT"
+  },
+  {
+    "abv": "KVA",
+    "full": "KILOVOLT AMPERE"
+  },
+  {
+    "abv": "KVAR",
+    "full": "KILOVOLT AMPERE REACTIVE"
+  },
+  {
+    "abv": "KW",
+    "full": "KILOWATT"
+  },
+  {
+    "abv": "KWH",
+    "full": "KILOWATT HOUR"
+  },
+  {
+    "abv": "L",
+    "full": "LITRE"
+  },
+  {
+    "abv": "L/ACID",
+    "full": "LEAD ACID"
+  },
+  {
+    "abv": "L/D",
+    "full": "LIGHT DUTY"
+  },
+  {
+    "abv": "L/HR",
+    "full": "LITERS PER HOUR"
+  },
+  {
+    "abv": "L/MIN",
+    "full": "LITERS PER MINUTE"
+  },
+  {
+    "abv": "L/R",
+    "full": "LONG RADIUS"
+  },
+  {
+    "abv": "LAB",
+    "full": "LABORATORY"
+  },
+  {
+    "abv": "LB",
+    "full": "POUND"
+  },
+  {
+    "abv": "LBC",
+    "full": "LOW BREAKING CAPACITY"
+  },
+  {
+    "abv": "LCD",
+    "full": "LIQUID CRYSTAL DISPLAY"
+  },
+  {
+    "abv": "LDC",
+    "full": "LINE DROP COMPENSATOR"
+  },
+  {
+    "abv": "LDPE",
+    "full": "LOW DENSITY POLYETHYLENE"
+  },
+  {
+    "abv": "LDPP",
+    "full": "LOW DENSITY POLYPROPYLENE"
+  },
+  {
+    "abv": "LDR",
+    "full": "LOADER"
+  },
+  {
+    "abv": "LED",
+    "full": "LIGHT EMITTING DIODE"
+  },
+  {
+    "abv": "LES",
+    "full": "LILLIPUT EDISON SCREW"
+  },
+  {
+    "abv": "LG",
+    "full": "LENGTH"
+  },
+  {
+    "abv": "LGE",
+    "full": "LARGE"
+  },
+  {
+    "abv": "LGND",
+    "full": "LEGEND"
+  },
+  {
+    "abv": "LH",
+    "full": "LEFT HAND"
+  },
+  {
+    "abv": "LHLL",
+    "full": "LEFT HAND LANGS LAY"
+  },
+  {
+    "abv": "LHOL",
+    "full": "LEFT HAND ORDINARY LAY"
+  },
+  {
+    "abv": "LIN",
+    "full": "LINEAR"
+  },
+  {
+    "abv": "LIQ",
+    "full": "LIQUID"
+  },
+  {
+    "abv": "LITH",
+    "full": "LITHIUM"
+  },
+  {
+    "abv": "LJ",
+    "full": "LAPPED JOINT"
+  },
+  {
+    "abv": "LM",
+    "full": "LINEAR METER"
+  },
+  {
+    "abv": "LP",
+    "full": "LOW PRESSURE"
+  },
+  {
+    "abv": "LPG",
+    "full": "LIQUEFIED PETROLEUM GAS"
+  },
+  {
+    "abv": "LPL",
+    "full": "LINK PLATE"
+  },
+  {
+    "abv": "LPS",
+    "full": "LOW PRESSURE SODIUM"
+  },
+  {
+    "abv": "LRC",
+    "full": "LOW RUPTURE CAPACITY"
+  },
+  {
+    "abv": "LT",
+    "full": "LIGHT"
+  },
+  {
+    "abv": "LTD",
+    "full": "LIMITED"
+  },
+  {
+    "abv": "LTG",
+    "full": "LIGHTING"
+  },
+  {
+    "abv": "LTNG",
+    "full": "LIGHTNING"
+  },
+  {
+    "abv": "LUBE",
+    "full": "LUBRICANT"
+  },
+  {
+    "abv": "LUBR",
+    "full": "LUBRICATOR"
+  },
+  {
+    "abv": "LV",
+    "full": "LOW VOLTAGE"
+  },
+  {
+    "abv": "LVDT",
+    "full": "LINEAR VOLTAGE DISPLACEMENT TRANSDUCER"
+  },
+  {
+    "abv": "LVL",
+    "full": "LEVEL"
+  },
+  {
+    "abv": "LWM",
+    "full": "LONG WAY OF MESH"
+  },
+  {
+    "abv": "LX",
+    "full": "LUX"
+  },
+  {
+    "abv": "M",
+    "full": "METER"
+  },
+  {
+    "abv": "M OHM",
+    "full": "MEGAOHM"
+  },
+  {
+    "abv": "M&F",
+    "full": "MALE AND FEMALE"
+  },
+  {
+    "abv": "M&M",
+    "full": "MALE AND MALE"
+  },
+  {
+    "abv": "M/C",
+    "full": "MACHINE"
+  },
+  {
+    "abv": "M/MIN",
+    "full": "METERS PER MINUTE"
+  },
+  {
+    "abv": "M/OX",
+    "full": "MERCURY OXIDE"
+  },
+  {
+    "abv": "M/S",
+    "full": "METERS PER SECOND"
+  },
+  {
+    "abv": "M2",
+    "full": "SQUARE METER"
+  },
+  {
+    "abv": "M3",
+    "full": "CUBIC METER"
+  },
+  {
+    "abv": "M3/MIN",
+    "full": "CUBIC METERS PER MINUTE"
+  },
+  {
+    "abv": "MA",
+    "full": "MILLIAMPERE"
+  },
+  {
+    "abv": "MA DC",
+    "full": "MILLIAMPERE DIRECT CURRENT"
+  },
+  {
+    "abv": "MAG",
+    "full": "MAGNET"
+  },
+  {
+    "abv": "MAINT",
+    "full": "MAINTENANCE"
+  },
+  {
+    "abv": "MAL",
+    "full": "MALLEABLE"
+  },
+  {
+    "abv": "MATL",
+    "full": "MATERIAL"
+  },
+  {
+    "abv": "MAX",
+    "full": "MAXIMUM"
+  },
+  {
+    "abv": "MB",
+    "full": "MEGABYTE"
+  },
+  {
+    "abv": "MBB",
+    "full": "MAKE BEFORE BREAK"
+  },
+  {
+    "abv": "MBC",
+    "full": "MINIATURE BAYONET CAP"
+  },
+  {
+    "abv": "MBF",
+    "full": "MINIMUM BREAKING FORCE"
+  },
+  {
+    "abv": "MBL",
+    "full": "MINIMUM BREAKING LOAD"
+  },
+  {
+    "abv": "M-BUS",
+    "full": "MULTI-BUS"
+  },
+  {
+    "abv": "MCB",
+    "full": "MINIATURE CIRCUIT BREAKER"
+  },
+  {
+    "abv": "MCC",
+    "full": "MINIATURE CENTRE CAP"
+  },
+  {
+    "abv": "MCCB",
+    "full": "MOLDED CASE CIRCUIT BREAKER"
+  },
+  {
+    "abv": "MCOV",
+    "full": "MAX CONTINUOUS OPERATING VOLTAGE"
+  },
+  {
+    "abv": "MD",
+    "full": "MACHINE DIRECTION"
+  },
+  {
+    "abv": "MDL",
+    "full": "MODEL NUMBER"
+  },
+  {
+    "abv": "MDPE",
+    "full": "MEDIUM DENSITY POLYETHYLENE"
+  },
+  {
+    "abv": "MECH",
+    "full": "MECHANICAL"
+  },
+  {
+    "abv": "MECHS",
+    "full": "MECHANICS"
+  },
+  {
+    "abv": "MED",
+    "full": "MEDIUM"
+  },
+  {
+    "abv": "MEDI",
+    "full": "MEDICATED"
+  },
+  {
+    "abv": "MEKP",
+    "full": "METHYL ETHYL KETONE PEROXIDE"
+  },
+  {
+    "abv": "MEM",
+    "full": "MEMORY"
+  },
+  {
+    "abv": "MEMO",
+    "full": "MEMORANDUM"
+  },
+  {
+    "abv": "MERCH",
+    "full": "MERCHANTABLE"
+  },
+  {
+    "abv": "MES",
+    "full": "MINIATURE EDISON SCREW"
+  },
+  {
+    "abv": "MFD",
+    "full": "MANUFACTURED"
+  },
+  {
+    "abv": "MFG",
+    "full": "MANUFACTURE"
+  },
+  {
+    "abv": "MFR",
+    "full": "MANUFACTURER"
+  },
+  {
+    "abv": "MG",
+    "full": "MILLIGRAM"
+  },
+  {
+    "abv": "MG/L",
+    "full": "MILLIGRAM PER LITER"
+  },
+  {
+    "abv": "MGSO4",
+    "full": "MAGNESIUM SULPHATE"
+  },
+  {
+    "abv": "MH",
+    "full": "METAL HALIDE"
+  },
+  {
+    "abv": "MHZ",
+    "full": "MEGAHERTZ"
+  },
+  {
+    "abv": "MI",
+    "full": "MALE IRON"
+  },
+  {
+    "abv": "MIC",
+    "full": "MICROMETER"
+  },
+  {
+    "abv": "MIG",
+    "full": "METAL INERT GAS"
+  },
+  {
+    "abv": "MIN",
+    "full": "MINIMUM"
+  },
+  {
+    "abv": "MINI",
+    "full": "MINIATURE"
+  },
+  {
+    "abv": "MIX",
+    "full": "MIXTURE"
+  },
+  {
+    "abv": "MIXR",
+    "full": "MIXER"
+  },
+  {
+    "abv": "MK",
+    "full": "MARK"
+  },
+  {
+    "abv": "MKG",
+    "full": "MARKING"
+  },
+  {
+    "abv": "MKR",
+    "full": "MARKER"
+  },
+  {
+    "abv": "ML",
+    "full": "MILLILITER"
+  },
+  {
+    "abv": "MLTG",
+    "full": "MELTING"
+  },
+  {
+    "abv": "MM",
+    "full": "MILLIMETER"
+  },
+  {
+    "abv": "MM2",
+    "full": "SQUARE MILLIMETERS"
+  },
+  {
+    "abv": "MNOMTR",
+    "full": "MANOMETER"
+  },
+  {
+    "abv": "MOD",
+    "full": "AMPLITUDE"
+  },
+  {
+    "abv": "MOIST",
+    "full": "MOISTURE"
+  },
+  {
+    "abv": "MOLY",
+    "full": "MOLYBDENUM"
+  },
+  {
+    "abv": "MON",
+    "full": "MONITOR"
+  },
+  {
+    "abv": "MOT",
+    "full": "MOTORISED"
+  },
+  {
+    "abv": "MOV",
+    "full": "METAL OXIDE VARISTOR"
+  },
+  {
+    "abv": "MP",
+    "full": "MELTING POINT"
+  },
+  {
+    "abv": "MPA",
+    "full": "MEGAPASCAL"
+  },
+  {
+    "abv": "MPH",
+    "full": "MILES PER HOUR"
+  },
+  {
+    "abv": "M-PIB",
+    "full": "MULTI-PIBUS"
+  },
+  {
+    "abv": "MPT",
+    "full": "MALE PIPE THREAD"
+  },
+  {
+    "abv": "MRC",
+    "full": "MEDIUM RUPTURE CAPACITY"
+  },
+  {
+    "abv": "MS",
+    "full": "MILD STEEL"
+  },
+  {
+    "abv": "MSF",
+    "full": "THOUSAND SQUARE FEET"
+  },
+  {
+    "abv": "MTD",
+    "full": "MOUNTED"
+  },
+  {
+    "abv": "MTG",
+    "full": "MOUNTING"
+  },
+  {
+    "abv": "MTL",
+    "full": "METAL"
+  },
+  {
+    "abv": "MTLWKG",
+    "full": "METALWORKING"
+  },
+  {
+    "abv": "MTN",
+    "full": "MOTION"
+  },
+  {
+    "abv": "MTNL",
+    "full": "MOTIONAL"
+  },
+  {
+    "abv": "MTR",
+    "full": "METER"
+  },
+  {
+    "abv": "MTRD",
+    "full": "METERED"
+  },
+  {
+    "abv": "MTRG",
+    "full": "METERING"
+  },
+  {
+    "abv": "MUFF",
+    "full": "MUFFLER"
+  },
+  {
+    "abv": "MULTI",
+    "full": "MULTIPLE"
+  },
+  {
+    "abv": "MUSH",
+    "full": "MUSHROOM"
+  },
+  {
+    "abv": "MUX",
+    "full": "MULTIPLEXING"
+  },
+  {
+    "abv": "MV",
+    "full": "MEGAVOLT"
+  },
+  {
+    "abv": "MVTR",
+    "full": "MOISTURE TRANSMISSION VAPOR RATE"
+  },
+  {
+    "abv": "MW",
+    "full": "MEGAWATT"
+  },
+  {
+    "abv": "MWP",
+    "full": "MAXIMUM WORKING PRESSURE"
+  },
+  {
+    "abv": "MWT",
+    "full": "MEAN WALL THICKNESS"
+  },
+  {
+    "abv": "MYS",
+    "full": "MINIMUM YIELD STRENGTH"
+  },
+  {
+    "abv": "N",
+    "full": "NEWTON"
+  },
+  {
+    "abv": "NA2CO3",
+    "full": "SODIUM CARBONATE"
+  },
+  {
+    "abv": "NA2O",
+    "full": "SODIUM PEROXIDE"
+  },
+  {
+    "abv": "NA2S",
+    "full": "SODIUM SULPHIDE"
+  },
+  {
+    "abv": "NABH4",
+    "full": "SODIUM BOROHYDRIDE"
+  },
+  {
+    "abv": "NACE",
+    "full": "NATIONAL ASSOCIATION OF CORROSION ENGINEERS"
+  },
+  {
+    "abv": "NACL",
+    "full": "SODIUM CHLORIDE"
+  },
+  {
+    "abv": "NACLO3",
+    "full": "SODIUM CHLORATE"
+  },
+  {
+    "abv": "NAHS",
+    "full": "SODIUM HYDROGEN SULPHIDE"
+  },
+  {
+    "abv": "NAOH",
+    "full": "SODIUM HYDROXIDE"
+  },
+  {
+    "abv": "NATL",
+    "full": "NATIONAL"
+  },
+  {
+    "abv": "NB",
+    "full": "NOMINAL BORE"
+  },
+  {
+    "abv": "NBR",
+    "full": "NITRILE BUTYL RUBBER"
+  },
+  {
+    "abv": "NC",
+    "full": "NORMALLY CLOSE"
+  },
+  {
+    "abv": "NDE",
+    "full": "NON DRIVE END"
+  },
+  {
+    "abv": "NDT",
+    "full": "NON DESTRUCTIVE TESTING"
+  },
+  {
+    "abv": "NEF",
+    "full": "AMERICAN NATIONAL EXTRA FINE THREAD"
+  },
+  {
+    "abv": "NEG",
+    "full": "NEGATIVE"
+  },
+  {
+    "abv": "NF",
+    "full": "NANOFARAD"
+  },
+  {
+    "abv": "NH3",
+    "full": "AMMONIA GAS"
+  },
+  {
+    "abv": "NI",
+    "full": "NICKEL"
+  },
+  {
+    "abv": "NIAL",
+    "full": "NICKEL ALUMINIUM"
+  },
+  {
+    "abv": "NICAD",
+    "full": "NICKEL CADMIUM"
+  },
+  {
+    "abv": "NICR",
+    "full": "NICKEL CHROMIUM"
+  },
+  {
+    "abv": "NIMH",
+    "full": "NICKEL METAL HYDRIDE"
+  },
+  {
+    "abv": "NIO2",
+    "full": "NICKEL OXIDE"
+  },
+  {
+    "abv": "NLGI",
+    "full": "NATIONAL LIBRARY GREASE INDEX"
+  },
+  {
+    "abv": "NM",
+    "full": "NEWTON METER"
+  },
+  {
+    "abv": "NO",
+    "full": "NORMALLY OPEN"
+  },
+  {
+    "abv": "NO.",
+    "full": "NUMBER"
+  },
+  {
+    "abv": "NO2",
+    "full": "NITROGEN DIOXIDE"
+  },
+  {
+    "abv": "NOM",
+    "full": "NOMINAL"
+  },
+  {
+    "abv": "NONAQS",
+    "full": "NONAQUEOUS"
+  },
+  {
+    "abv": "NONMTL",
+    "full": "NONMETALLIC"
+  },
+  {
+    "abv": "NONRCHG",
+    "full": "NONRECHARGABLE"
+  },
+  {
+    "abv": "NOS",
+    "full": "NUMBERS"
+  },
+  {
+    "abv": "NP",
+    "full": "NICKEL PLATED"
+  },
+  {
+    "abv": "NPT",
+    "full": "AMERICAN STANDARD TAPER PIPE THREAD"
+  },
+  {
+    "abv": "NPTF",
+    "full": "NATIONAL PIPE TAPER FUEL"
+  },
+  {
+    "abv": "NPTP",
+    "full": "NATIONAL PIPE THREAD PARALLEL"
+  },
+  {
+    "abv": "NPTT",
+    "full": "NATIONAL PIPE THREAD TAPER"
+  },
+  {
+    "abv": "NRV",
+    "full": "NON RETURN VALVE"
+  },
+  {
+    "abv": "NSEC",
+    "full": "NANOSECOND"
+  },
+  {
+    "abv": "NSSC",
+    "full": "NEUTRAL SULPHITE SEMI CHEMICAL"
+  },
+  {
+    "abv": "O/A",
+    "full": "OVERALL"
+  },
+  {
+    "abv": "O/H",
+    "full": "OVERHEAD"
+  },
+  {
+    "abv": "O/L",
+    "full": "OVERLOAD"
+  },
+  {
+    "abv": "O/P",
+    "full": "OUTPUT"
+  },
+  {
+    "abv": "OBSERV",
+    "full": "OBSERVATION"
+  },
+  {
+    "abv": "OC",
+    "full": "OUTSIDE CIRCUMFERENCE"
+  },
+  {
+    "abv": "OCB",
+    "full": "OIL CIRCUIT BREAKER"
+  },
+  {
+    "abv": "OCT",
+    "full": "OCTAGONAL"
+  },
+  {
+    "abv": "OD",
+    "full": "OUTSIDE DIAMETER"
+  },
+  {
+    "abv": "OE",
+    "full": "OPEN ENDED"
+  },
+  {
+    "abv": "OFN",
+    "full": "OXYGEN FREE NITROGEN"
+  },
+  {
+    "abv": "OHM",
+    "full": "OHM"
+  },
+  {
+    "abv": "OINT",
+    "full": "OINTMENT"
+  },
+  {
+    "abv": "OP-AMP",
+    "full": "OPERATIONAL AMPLIFIER"
+  },
+  {
+    "abv": "OP-CTRL",
+    "full": "OPERATIONAL CONTROLLER"
+  },
+  {
+    "abv": "OPER",
+    "full": "OPERATE"
+  },
+  {
+    "abv": "OPR",
+    "full": "OPERATING"
+  },
+  {
+    "abv": "OPT",
+    "full": "OPTICAL"
+  },
+  {
+    "abv": "OPTO-E",
+    "full": "OPTOELECTRONIC"
+  },
+  {
+    "abv": "ORFS",
+    "full": "O-RING FACE SEAL"
+  },
+  {
+    "abv": "ORG",
+    "full": "ORANGE"
+  },
+  {
+    "abv": "ORS",
+    "full": "O-RING SEAL"
+  },
+  {
+    "abv": "OS",
+    "full": "OVERSIZE"
+  },
+  {
+    "abv": "OSCIL",
+    "full": "OSCILLATE"
+  },
+  {
+    "abv": "OXY",
+    "full": "OXYGEN"
+  },
+  {
+    "abv": "OZ",
+    "full": "OUNCE"
+  },
+  {
+    "abv": "P",
+    "full": "PITCH"
+  },
+  {
+    "abv": "P/N",
+    "full": "PART NUMBER"
+  },
+  {
+    "abv": "PA",
+    "full": "PASCAL"
+  },
+  {
+    "abv": "PACK",
+    "full": "PACK"
+  },
+  {
+    "abv": "PAR",
+    "full": "PARABOLIC"
+  },
+  {
+    "abv": "PAS",
+    "full": "PASCAL SECOND"
+  },
+  {
+    "abv": "PATT",
+    "full": "PATTERN"
+  },
+  {
+    "abv": "PC",
+    "full": "PERSONAL COMPUTER"
+  },
+  {
+    "abv": "PCB",
+    "full": "PRINTED CIRCUIT BOARD"
+  },
+  {
+    "abv": "PCD",
+    "full": "PITCH CIRCLE DIAMETER"
+  },
+  {
+    "abv": "PD",
+    "full": "PITCH DIAMETER"
+  },
+  {
+    "abv": "PDO",
+    "full": "PULSE DURATION OUTPUT"
+  },
+  {
+    "abv": "PE",
+    "full": "PHOTOELECTRIC"
+  },
+  {
+    "abv": "PERM",
+    "full": "PERMANENT"
+  },
+  {
+    "abv": "PERS",
+    "full": "PERSONAL"
+  },
+  {
+    "abv": "PERSNL",
+    "full": "PERSONNEL"
+  },
+  {
+    "abv": "PET",
+    "full": "POLYETHYLENE TEREPHTHALATE"
+  },
+  {
+    "abv": "PF",
+    "full": "PICOFARAD"
+  },
+  {
+    "abv": "PG",
+    "full": "PRESSURE GAUGE"
+  },
+  {
+    "abv": "PH",
+    "full": "HYDROGEN ION CONCENTRATION"
+  },
+  {
+    "abv": "PHOS",
+    "full": "PHOSPHOR"
+  },
+  {
+    "abv": "PI",
+    "full": "PROPORTIONAL INTEGRAL"
+  },
+  {
+    "abv": "PIB",
+    "full": "PIBUS"
+  },
+  {
+    "abv": "PID",
+    "full": "PROPORTIONAL INTEGRAL DERIVATIVE"
+  },
+  {
+    "abv": "PILS",
+    "full": "PAPER INSULATED LEAD SHEATHED"
+  },
+  {
+    "abv": "PIS",
+    "full": "PRESSURE INDICTING SWITCH"
+  },
+  {
+    "abv": "PIV",
+    "full": "PEAK INVERSE VOLTAGE"
+  },
+  {
+    "abv": "PK",
+    "full": "PK"
+  },
+  {
+    "abv": "PKG",
+    "full": "PACKAGE"
+  },
+  {
+    "abv": "PKT",
+    "full": "PACKET"
+  },
+  {
+    "abv": "PLC",
+    "full": "PROGRAMMABLE LOGIC CONTROLLER"
+  },
+  {
+    "abv": "PLN",
+    "full": "PLAIN"
+  },
+  {
+    "abv": "PLT",
+    "full": "PLANT"
+  },
+  {
+    "abv": "PNEU",
+    "full": "PNEUMATIC"
+  },
+  {
+    "abv": "PNK",
+    "full": "PINK"
+  },
+  {
+    "abv": "PNL",
+    "full": "PANEL"
+  },
+  {
+    "abv": "PNLZD",
+    "full": "PANELISED"
+  },
+  {
+    "abv": "PO4",
+    "full": "PHOSPHATE"
+  },
+  {
+    "abv": "POLY",
+    "full": "POLYESTER"
+  },
+  {
+    "abv": "POLYCOT",
+    "full": "POLYESTER COTTON"
+  },
+  {
+    "abv": "POS",
+    "full": "POSITION"
+  },
+  {
+    "abv": "POSN",
+    "full": "POSITION"
+  },
+  {
+    "abv": "POSNG",
+    "full": "POSITIONING"
+  },
+  {
+    "abv": "POSNR",
+    "full": "POSITIONER"
+  },
+  {
+    "abv": "POT",
+    "full": "POTENTIOMETER"
+  },
+  {
+    "abv": "POTAS",
+    "full": "POTASSIUM"
+  },
+  {
+    "abv": "POW",
+    "full": "PETROL OIL WATER"
+  },
+  {
+    "abv": "PP",
+    "full": "POLYPROPYLENE"
+  },
+  {
+    "abv": "P-P",
+    "full": "POINT TO POINT"
+  },
+  {
+    "abv": "PPB",
+    "full": "PARTS PER BILLION"
+  },
+  {
+    "abv": "PPF",
+    "full": "POUNDS PER FOOT"
+  },
+  {
+    "abv": "PPM",
+    "full": "PARTS PER MILLION"
+  },
+  {
+    "abv": "PPR",
+    "full": "PAPER"
+  },
+  {
+    "abv": "PR",
+    "full": "PAIR"
+  },
+  {
+    "abv": "PREAMP",
+    "full": "PREAMPLIFIER"
+  },
+  {
+    "abv": "PRESS",
+    "full": "PRESSURE"
+  },
+  {
+    "abv": "PRI",
+    "full": "PRIMARY"
+  },
+  {
+    "abv": "PROC",
+    "full": "PROCESS"
+  },
+  {
+    "abv": "PROG",
+    "full": "PROGRAM"
+  },
+  {
+    "abv": "PROGS",
+    "full": "PROGRAMS"
+  },
+  {
+    "abv": "PROM",
+    "full": "PROGRAMMABLE READ ONLY MEMORY"
+  },
+  {
+    "abv": "PROP",
+    "full": "PROPORTIONAL"
+  },
+  {
+    "abv": "PROT",
+    "full": "PROTECTOR"
+  },
+  {
+    "abv": "PROTN",
+    "full": "PROTECTION"
+  },
+  {
+    "abv": "PROTV",
+    "full": "PROTECTIVE"
+  },
+  {
+    "abv": "PROX",
+    "full": "PROXIMITY"
+  },
+  {
+    "abv": "P-RTG",
+    "full": "POWER RATING"
+  },
+  {
+    "abv": "PS",
+    "full": "PARALLEL SLIDE"
+  },
+  {
+    "abv": "PSI",
+    "full": "POUNDS PER SQUARE INCH"
+  },
+  {
+    "abv": "PSIG",
+    "full": "POUNDS PER SQUARE INCH GAUGE"
+  },
+  {
+    "abv": "P-SIZE",
+    "full": "PITCH SIZE"
+  },
+  {
+    "abv": "PSU",
+    "full": "POWER SUPPLY UNIT"
+  },
+  {
+    "abv": "PT",
+    "full": "PINT"
+  },
+  {
+    "abv": "PTFE",
+    "full": "POLYTETRAFLUOROETHYLENE"
+  },
+  {
+    "abv": "PTY",
+    "full": "PROPRIETARY"
+  },
+  {
+    "abv": "PU",
+    "full": "POLYURETHANE"
+  },
+  {
+    "abv": "PUR",
+    "full": "PURPLE"
+  },
+  {
+    "abv": "PURP",
+    "full": "PURPOSE"
+  },
+  {
+    "abv": "PVA",
+    "full": "POLYVINYLACETATE"
+  },
+  {
+    "abv": "PVC",
+    "full": "POLYVINYLCHLORIDE"
+  },
+  {
+    "abv": "PVDF",
+    "full": "POLYVINYLIDENE FLUORIDE"
+  },
+  {
+    "abv": "PWDR",
+    "full": "POWDER"
+  },
+  {
+    "abv": "PWK",
+    "full": "PIPEWORK"
+  },
+  {
+    "abv": "PWR",
+    "full": "POWER"
+  },
+  {
+    "abv": "QADC",
+    "full": "Q-BUS ANALOG TO DIGITAL CONVERTER"
+  },
+  {
+    "abv": "QBSC",
+    "full": "Q-BUS BUFFERED SERIAL COMMUNICATIONS"
+  },
+  {
+    "abv": "QD",
+    "full": "QUICK DISCONNECT"
+  },
+  {
+    "abv": "QDAC",
+    "full": "Q-BUS DIGITAL TO ANALOG CONVERTER"
+  },
+  {
+    "abv": "QLTY",
+    "full": "QUALITY"
+  },
+  {
+    "abv": "QT",
+    "full": "QUART"
+  },
+  {
+    "abv": "QTR",
+    "full": "QUARTER"
+  },
+  {
+    "abv": "QTY",
+    "full": "QUANTITY"
+  },
+  {
+    "abv": "QUAD",
+    "full": "QUADRATURE"
+  },
+  {
+    "abv": "R",
+    "full": "RATIO"
+  },
+  {
+    "abv": "R/ANG",
+    "full": "RIGHT ANGLE"
+  },
+  {
+    "abv": "R/C",
+    "full": "REINFORCED CONSTRUCTION"
+  },
+  {
+    "abv": "R/H",
+    "full": "REHEATER"
+  },
+  {
+    "abv": "RAD",
+    "full": "RADII"
+  },
+  {
+    "abv": "RADG",
+    "full": "RADIOGRAPHY"
+  },
+  {
+    "abv": "RAIL",
+    "full": "RAILWAY"
+  },
+  {
+    "abv": "RAM",
+    "full": "RANDOM ACCESS MEMORY"
+  },
+  {
+    "abv": "RBEC",
+    "full": "ROLLER BEARING ENGINEERING COMMITTEE"
+  },
+  {
+    "abv": "RBR",
+    "full": "RUBBER"
+  },
+  {
+    "abv": "RC",
+    "full": "RESISTIVE CAPACITIVE"
+  },
+  {
+    "abv": "RCHG",
+    "full": "RECHARGABLE"
+  },
+  {
+    "abv": "RCU",
+    "full": "REMOTE CONTROL UNIT"
+  },
+  {
+    "abv": "RD",
+    "full": "ROUND"
+  },
+  {
+    "abv": "RD/GRD",
+    "full": "ROUND WITH GROUND"
+  },
+  {
+    "abv": "RECIP",
+    "full": "RECIPROCATING"
+  },
+  {
+    "abv": "RECIR",
+    "full": "RECIRCULATING"
+  },
+  {
+    "abv": "RECT",
+    "full": "RECTANGULAR"
+  },
+  {
+    "abv": "RECTR",
+    "full": "RECTIFIER"
+  },
+  {
+    "abv": "RED",
+    "full": "RED"
+  },
+  {
+    "abv": "REF",
+    "full": "REFERENCE"
+  },
+  {
+    "abv": "REFLEC",
+    "full": "REFLECTED"
+  },
+  {
+    "abv": "REFRAC",
+    "full": "REFRACTORY"
+  },
+  {
+    "abv": "REG",
+    "full": "REGULATED"
+  },
+  {
+    "abv": "REINF",
+    "full": "REINFORCE"
+  },
+  {
+    "abv": "REMO",
+    "full": "REMOTE"
+  },
+  {
+    "abv": "REPLMT",
+    "full": "REPLACEMENT"
+  },
+  {
+    "abv": "REQ",
+    "full": "REQUISITION"
+  },
+  {
+    "abv": "REQD",
+    "full": "REQUIRED"
+  },
+  {
+    "abv": "RES",
+    "full": "RESISTANCE"
+  },
+  {
+    "abv": "RET",
+    "full": "RETAINED"
+  },
+  {
+    "abv": "RETHDG",
+    "full": "RETHREADING"
+  },
+  {
+    "abv": "RETRACT",
+    "full": "FOLDAWAY"
+  },
+  {
+    "abv": "REV",
+    "full": "REVISED"
+  },
+  {
+    "abv": "RF",
+    "full": "RADIO FREQUENCY"
+  },
+  {
+    "abv": "RFI",
+    "full": "RADIO FREQUENCY INTERFERENCE"
+  },
+  {
+    "abv": "RGB",
+    "full": "RED GREEN BLUE"
+  },
+  {
+    "abv": "RGBS",
+    "full": "RED GREEN BLUE SYNC"
+  },
+  {
+    "abv": "RH",
+    "full": "RELATIVE HUMIDITY"
+  },
+  {
+    "abv": "RHLL",
+    "full": "RIGHT HAND LANGS LAY"
+  },
+  {
+    "abv": "RHOL",
+    "full": "RIGHT HAND ORDINARY LAY"
+  },
+  {
+    "abv": "RHS",
+    "full": "RECTANGULAR HOLLOW SECTION"
+  },
+  {
+    "abv": "RLR",
+    "full": "ROLLER"
+  },
+  {
+    "abv": "RLRS",
+    "full": "ROLLERS"
+  },
+  {
+    "abv": "RMS",
+    "full": "ROOT MEAN SQUARE"
+  },
+  {
+    "abv": "RNG",
+    "full": "RANGE"
+  },
+  {
+    "abv": "ROM",
+    "full": "READ ONLY MEMORY"
+  },
+  {
+    "abv": "ROT",
+    "full": "ROTARY"
+  },
+  {
+    "abv": "RPC",
+    "full": "REACTIVE POWER COMPENSATOR"
+  },
+  {
+    "abv": "RPH",
+    "full": "REVOLUTIONS PER HOUR"
+  },
+  {
+    "abv": "R-PH",
+    "full": "RED-PHASE"
+  },
+  {
+    "abv": "RPM",
+    "full": "REVOLUTIONS PER MINUTE"
+  },
+  {
+    "abv": "RQMT",
+    "full": "REQUIREMENT"
+  },
+  {
+    "abv": "RSB",
+    "full": "ROUGH STOCK BORE"
+  },
+  {
+    "abv": "RSJ",
+    "full": "ROLLED STEEL JOIST"
+  },
+  {
+    "abv": "RTD",
+    "full": "RESISTANCE THERMOMETER DEVICE"
+  },
+  {
+    "abv": "RTG",
+    "full": "RATING"
+  },
+  {
+    "abv": "RTJ",
+    "full": "RING TYPE JOINT"
+  },
+  {
+    "abv": "RX",
+    "full": "RECEIVER"
+  },
+  {
+    "abv": "S",
+    "full": "SIEMENS"
+  },
+  {
+    "abv": "S&S",
+    "full": "SCREWED AND SOCKETED"
+  },
+  {
+    "abv": "S/N",
+    "full": "SERIAL NUMBER"
+  },
+  {
+    "abv": "S/R",
+    "full": "SHORT RADIUS"
+  },
+  {
+    "abv": "SA",
+    "full": "SELF ALIGNING"
+  },
+  {
+    "abv": "SAE",
+    "full": "SOCIETY OF AUTOMOTIVE ENGINEERS"
+  },
+  {
+    "abv": "SAW",
+    "full": "SUBMERGED ARC WELDED"
+  },
+  {
+    "abv": "SBC",
+    "full": "SMALL BAYONET CAP"
+  },
+  {
+    "abv": "SBR",
+    "full": "STYRENE BUTADIENE"
+  },
+  {
+    "abv": "SC",
+    "full": "SILICON CARBIDE"
+  },
+  {
+    "abv": "SCC",
+    "full": "SINGLE CENTRE CONTACT"
+  },
+  {
+    "abv": "SCFH",
+    "full": "STANDARD CUBIC FEET PER HOUR"
+  },
+  {
+    "abv": "SCFM",
+    "full": "STANDARD CUBIC FEET PER MINUTE"
+  },
+  {
+    "abv": "SCH",
+    "full": "SCHEDULE"
+  },
+  {
+    "abv": "SCJ",
+    "full": "SOLVENT CEMENT JOINT"
+  },
+  {
+    "abv": "SCR",
+    "full": "SILICON CONTROLLED RECTIFIER"
+  },
+  {
+    "abv": "SCRW",
+    "full": "SCREW"
+  },
+  {
+    "abv": "SCSI",
+    "full": "SMALL COMPUTER SYSTEMS INTERFACE"
+  },
+  {
+    "abv": "SEC",
+    "full": "SECONDS"
+  },
+  {
+    "abv": "SECT",
+    "full": "SECTION"
+  },
+  {
+    "abv": "SEQ",
+    "full": "SEQUENCE"
+  },
+  {
+    "abv": "SERV",
+    "full": "SERVICE"
+  },
+  {
+    "abv": "SES",
+    "full": "SMALL EDISON SCREW"
+  },
+  {
+    "abv": "SF",
+    "full": "STANDARD FASTENER"
+  },
+  {
+    "abv": "SF6",
+    "full": "SULPHUR HEXA FLUORIDE"
+  },
+  {
+    "abv": "SG",
+    "full": "SPECIFIC GRAVITY"
+  },
+  {
+    "abv": "SGL",
+    "full": "SINGLE"
+  },
+  {
+    "abv": "SHIP",
+    "full": "SHIPPING"
+  },
+  {
+    "abv": "SHLD",
+    "full": "SHOULDERED"
+  },
+  {
+    "abv": "SHS",
+    "full": "SQUARE HOLLOW SECTION"
+  },
+  {
+    "abv": "SHT",
+    "full": "SHORT"
+  },
+  {
+    "abv": "SI",
+    "full": "SYSTEME INTERNATIONALE"
+  },
+  {
+    "abv": "SIG",
+    "full": "SIGNAL"
+  },
+  {
+    "abv": "SIL",
+    "full": "SILICON"
+  },
+  {
+    "abv": "SIL CARB",
+    "full": "SILICON CARBIDE"
+  },
+  {
+    "abv": "SIMP",
+    "full": "SIMPLEX"
+  },
+  {
+    "abv": "SINT",
+    "full": "SINTERED"
+  },
+  {
+    "abv": "SIO2",
+    "full": "SILICON DIOXIDE"
+  },
+  {
+    "abv": "SKT",
+    "full": "SOCKET"
+  },
+  {
+    "abv": "SLV",
+    "full": "SLEEVE"
+  },
+  {
+    "abv": "SML",
+    "full": "SMALL"
+  },
+  {
+    "abv": "SMO",
+    "full": "STEPPER MOTOR OUTPUT"
+  },
+  {
+    "abv": "SO2",
+    "full": "SULPHUR DIOXIDE"
+  },
+  {
+    "abv": "SO4",
+    "full": "SULPHATE"
+  },
+  {
+    "abv": "SOL",
+    "full": "SOLENOID"
+  },
+  {
+    "abv": "SOLN",
+    "full": "SOLUTION"
+  },
+  {
+    "abv": "SOLV",
+    "full": "SOLVENT"
+  },
+  {
+    "abv": "SP",
+    "full": "SINGLE POLE"
+  },
+  {
+    "abv": "SPD",
+    "full": "SPEED"
+  },
+  {
+    "abv": "SPDT",
+    "full": "SINGLE POLE DOUBLE THROW"
+  },
+  {
+    "abv": "SPEC",
+    "full": "SPECIAL"
+  },
+  {
+    "abv": "SPECMTR",
+    "full": "SPECTROPHOTOMETER"
+  },
+  {
+    "abv": "SPEEDO",
+    "full": "SPEEDOMETER"
+  },
+  {
+    "abv": "SPHYGMTR",
+    "full": "SPHYGMOMANOMETER"
+  },
+  {
+    "abv": "SPKT",
+    "full": "SPROCKET"
+  },
+  {
+    "abv": "SPL",
+    "full": "SUPPLY"
+  },
+  {
+    "abv": "SPN",
+    "full": "SINGLE POLE NEUTRAL"
+  },
+  {
+    "abv": "SPN+E",
+    "full": "SINGLE POLE NEUTRAL PLUS EARTH"
+  },
+  {
+    "abv": "SPRG",
+    "full": "SPRING"
+  },
+  {
+    "abv": "SPROMTR",
+    "full": "SPIROMETER"
+  },
+  {
+    "abv": "SPST",
+    "full": "SINGLE POLE SINGLE THROW"
+  },
+  {
+    "abv": "SQ",
+    "full": "SQUARE"
+  },
+  {
+    "abv": "SR",
+    "full": "SQUARE ROOT"
+  },
+  {
+    "abv": "SRBF",
+    "full": "SYNTHETIC RESIN BONDED FABRIC"
+  },
+  {
+    "abv": "SRBP",
+    "full": "SYNTHETIC RESIN BONDED PAPER"
+  },
+  {
+    "abv": "SRL",
+    "full": "SOFT RUBBER LINED"
+  },
+  {
+    "abv": "S-RTG",
+    "full": "SPEED RATING"
+  },
+  {
+    "abv": "SS",
+    "full": "STAINLESS STEEL"
+  },
+  {
+    "abv": "SSB",
+    "full": "SINGLE SIDE BAND"
+  },
+  {
+    "abv": "SSP",
+    "full": "SCANNER SUPPORT PROCESSOR"
+  },
+  {
+    "abv": "SST",
+    "full": "SECONDARY STANDARD"
+  },
+  {
+    "abv": "STBL",
+    "full": "STABLE"
+  },
+  {
+    "abv": "STD",
+    "full": "STANDARD"
+  },
+  {
+    "abv": "STDZD",
+    "full": "STANDARDISED"
+  },
+  {
+    "abv": "STG",
+    "full": "STAGE"
+  },
+  {
+    "abv": "STL",
+    "full": "STEEL"
+  },
+  {
+    "abv": "STM",
+    "full": "STEAM"
+  },
+  {
+    "abv": "STOR",
+    "full": "STORAGE"
+  },
+  {
+    "abv": "STP",
+    "full": "SHIELDED TWISTED PAIR"
+  },
+  {
+    "abv": "STR",
+    "full": "STRAIGHT"
+  },
+  {
+    "abv": "STRG",
+    "full": "STRENGTH"
+  },
+  {
+    "abv": "STRUCT",
+    "full": "STRUCTURAL"
+  },
+  {
+    "abv": "SUB",
+    "full": "SUBMERSIBLE"
+  },
+  {
+    "abv": "SUBASSY",
+    "full": "SUBASSEMBLY"
+  },
+  {
+    "abv": "SUM AMP",
+    "full": "SUMMING AMPLIFIER"
+  },
+  {
+    "abv": "SUP",
+    "full": "SUPPORT"
+  },
+  {
+    "abv": "SW",
+    "full": "SOCKET WELD"
+  },
+  {
+    "abv": "SW/GEAR",
+    "full": "SWITCHGEAR"
+  },
+  {
+    "abv": "SWA",
+    "full": "STEEL WIRE ARMOR"
+  },
+  {
+    "abv": "SWG",
+    "full": "STANDARD WIRE GAUGE"
+  },
+  {
+    "abv": "SWJ",
+    "full": "SOLVENT WELDED JOINT"
+  },
+  {
+    "abv": "SWL",
+    "full": "SAFE WORKING LOAD"
+  },
+  {
+    "abv": "SWM",
+    "full": "SHORT WAY OF MESH"
+  },
+  {
+    "abv": "SWP",
+    "full": "SAFE WORKING PRESSURE"
+  },
+  {
+    "abv": "SWR",
+    "full": "STANDING WAVE RATIO"
+  },
+  {
+    "abv": "SWV",
+    "full": "SOIL WASTE VENT"
+  },
+  {
+    "abv": "SYN",
+    "full": "SYNTHETIC"
+  },
+  {
+    "abv": "SYNC",
+    "full": "SYNCHRONISED"
+  },
+  {
+    "abv": "SYS",
+    "full": "SYSTEM"
+  },
+  {
+    "abv": "T",
+    "full": "TIME"
+  },
+  {
+    "abv": "T&G",
+    "full": "TONGUE AND GROOVE"
+  },
+  {
+    "abv": "T/C",
+    "full": "THERMOCOUPLE"
+  },
+  {
+    "abv": "T/HR",
+    "full": "TONNES PER HOUR"
+  },
+  {
+    "abv": "T/L",
+    "full": "TAPER LOCK"
+  },
+  {
+    "abv": "TACHO",
+    "full": "TACHOMETER"
+  },
+  {
+    "abv": "TART",
+    "full": "TARTRATE"
+  },
+  {
+    "abv": "TB",
+    "full": "TERMINAL BOX"
+  },
+  {
+    "abv": "TBC",
+    "full": "TENSILE BOLTING CLOTH"
+  },
+  {
+    "abv": "TBE",
+    "full": "THREADED BOTH ENDS"
+  },
+  {
+    "abv": "TC",
+    "full": "TUNGSTEN CARBIDE"
+  },
+  {
+    "abv": "TCM",
+    "full": "PTFE FILLED COMPOSITE MATERIAL"
+  },
+  {
+    "abv": "TE",
+    "full": "TURBINE END"
+  },
+  {
+    "abv": "TECH",
+    "full": "TECHNICAL"
+  },
+  {
+    "abv": "TEFC",
+    "full": "TOTALLY ENCLOSED FAN COOLED"
+  },
+  {
+    "abv": "TEFLON",
+    "full": "TEFLON"
+  },
+  {
+    "abv": "TELE",
+    "full": "TELESCOPIC"
+  },
+  {
+    "abv": "TEMP",
+    "full": "TEMPERATURE"
+  },
+  {
+    "abv": "TENV",
+    "full": "TOTALLY ENCLOSED NON-VENTILATED"
+  },
+  {
+    "abv": "TERM",
+    "full": "TERMINAL"
+  },
+  {
+    "abv": "THD",
+    "full": "THREADED"
+  },
+  {
+    "abv": "THD DIA",
+    "full": "THREADED DIAMETER"
+  },
+  {
+    "abv": "THD END",
+    "full": "THREADED END"
+  },
+  {
+    "abv": "THDG",
+    "full": "THREADING"
+  },
+  {
+    "abv": "THERMO",
+    "full": "THERMOSTAT"
+  },
+  {
+    "abv": "THK",
+    "full": "THICKNESS"
+  },
+  {
+    "abv": "THR",
+    "full": "THRUST"
+  },
+  {
+    "abv": "THRMOMTR",
+    "full": "THERMOMETER"
+  },
+  {
+    "abv": "THRU",
+    "full": "THROUGH"
+  },
+  {
+    "abv": "TI",
+    "full": "TITANIUM"
+  },
+  {
+    "abv": "TIG",
+    "full": "TUNGSTEN INERT GAS"
+  },
+  {
+    "abv": "TMP",
+    "full": "THERMO MECHANICAL PULP"
+  },
+  {
+    "abv": "T-NO",
+    "full": "NO OF TEETH"
+  },
+  {
+    "abv": "TOL",
+    "full": "TOLERANCE"
+  },
+  {
+    "abv": "TP",
+    "full": "TRIPLE POLE"
+  },
+  {
+    "abv": "TPDT",
+    "full": "TRIPLE POLE DOUBLE THROW"
+  },
+  {
+    "abv": "TPI",
+    "full": "TEETH PER INCH"
+  },
+  {
+    "abv": "TPN",
+    "full": "TRIPLE POLE NEUTRAL"
+  },
+  {
+    "abv": "TPR",
+    "full": "TAPER"
+  },
+  {
+    "abv": "TPST",
+    "full": "TRIPLE POLE SINGLE THROW"
+  },
+  {
+    "abv": "TPTT",
+    "full": "TRIPLE POLE TRIPLE THROW"
+  },
+  {
+    "abv": "TRANS",
+    "full": "TRANSMISSION"
+  },
+  {
+    "abv": "TREAT",
+    "full": "TREATMENT"
+  },
+  {
+    "abv": "TRIANG",
+    "full": "TRIANGULAR"
+  },
+  {
+    "abv": "TRIP",
+    "full": "TRIPLEX"
+  },
+  {
+    "abv": "TRS",
+    "full": "TOUGH RUBBER SHEATH"
+  },
+  {
+    "abv": "TS",
+    "full": "TENSILE STRENGTH"
+  },
+  {
+    "abv": "TTL",
+    "full": "TRANSISTOR TO TRANSISTOR LOGIC"
+  },
+  {
+    "abv": "TURB",
+    "full": "TURBINE"
+  },
+  {
+    "abv": "TV",
+    "full": "TELEVISION"
+  },
+  {
+    "abv": "TW",
+    "full": "TOP WIDTH"
+  },
+  {
+    "abv": "T-WIND",
+    "full": "TEMPERATURE WINDING"
+  },
+  {
+    "abv": "TWR",
+    "full": "TOWER"
+  },
+  {
+    "abv": "TX",
+    "full": "TRANSMITTER"
+  },
+  {
+    "abv": "TXD",
+    "full": "TRANSDUCER"
+  },
+  {
+    "abv": "TXF",
+    "full": "TRANSFORMER"
+  },
+  {
+    "abv": "TX-RX",
+    "full": "RECEIVER-TRANSMITTER"
+  },
+  {
+    "abv": "U/L",
+    "full": "UNLOADER"
+  },
+  {
+    "abv": "U/T",
+    "full": "UNIT TRANSFORMER"
+  },
+  {
+    "abv": "UA",
+    "full": "MICROAMPERE"
+  },
+  {
+    "abv": "UF",
+    "full": "MICROFARAD"
+  },
+  {
+    "abv": "UGND",
+    "full": "UNDERGROUND"
+  },
+  {
+    "abv": "UH",
+    "full": "MICROHENRY"
+  },
+  {
+    "abv": "UHF",
+    "full": "ULTRA HIGH FREQUENCY"
+  },
+  {
+    "abv": "UHMWPE",
+    "full": "ULTRA HIGH MOLECULAR WEIGHT POLYETHYLENE"
+  },
+  {
+    "abv": "UL",
+    "full": "MICROLITER"
+  },
+  {
+    "abv": "UM",
+    "full": "MICROMETER"
+  },
+  {
+    "abv": "UMHO",
+    "full": "MICRO MHO"
+  },
+  {
+    "abv": "UNBLEA",
+    "full": "UNBLEACHED"
+  },
+  {
+    "abv": "UNC",
+    "full": "UNIFIED COARSE THREAD"
+  },
+  {
+    "abv": "UNEF",
+    "full": "UNIFIED EXTRA FINE THREAD"
+  },
+  {
+    "abv": "UNF",
+    "full": "UNIFIED FINE THREAD"
+  },
+  {
+    "abv": "UPS",
+    "full": "UNINTERRUPTED POWER SUPPLY"
+  },
+  {
+    "abv": "UPVC",
+    "full": "UNPLASTICISED POLYVINYLCHLORIDE"
+  },
+  {
+    "abv": "USGPH",
+    "full": "US GALLONS PER HOUR"
+  },
+  {
+    "abv": "USGPM",
+    "full": "US GALLONS PER MINUTE"
+  },
+  {
+    "abv": "USONIC",
+    "full": "ULTRASONIC"
+  },
+  {
+    "abv": "USP",
+    "full": "UNITED STATES PHARMACOPOEIA"
+  },
+  {
+    "abv": "USS",
+    "full": "UNITED STATES STANDARD"
+  },
+  {
+    "abv": "UTP",
+    "full": "UNSHIELDED TWISTED PAIR"
+  },
+  {
+    "abv": "UV",
+    "full": "MICROVOLT"
+  },
+  {
+    "abv": "UW",
+    "full": "MICROWATT"
+  },
+  {
+    "abv": "V",
+    "full": "VOLT"
+  },
+  {
+    "abv": "V/V",
+    "full": "VOLUME PER VOLUME"
+  },
+  {
+    "abv": "VAC",
+    "full": "VACUUM"
+  },
+  {
+    "abv": "VAR",
+    "full": "VARIABLE"
+  },
+  {
+    "abv": "VCB",
+    "full": "VACUUM CIRCUIT BREAKER"
+  },
+  {
+    "abv": "VDC",
+    "full": "VOLTS DIRECT CURRENT"
+  },
+  {
+    "abv": "VEH",
+    "full": "VEHICLE"
+  },
+  {
+    "abv": "VEHC",
+    "full": "VEHICULAR"
+  },
+  {
+    "abv": "VENT",
+    "full": "VENTILATION"
+  },
+  {
+    "abv": "VER",
+    "full": "VERSION"
+  },
+  {
+    "abv": "VERT",
+    "full": "VERTICAL"
+  },
+  {
+    "abv": "VFC",
+    "full": "VOLTAGE TO FREQUENCY CONVERTER"
+  },
+  {
+    "abv": "VHF",
+    "full": "VERY HIGH FREQUENCY"
+  },
+  {
+    "abv": "VIBR",
+    "full": "VIBRATOR"
+  },
+  {
+    "abv": "VISC",
+    "full": "VISCOSITY"
+  },
+  {
+    "abv": "VLV",
+    "full": "VALVE"
+  },
+  {
+    "abv": "V-NOM",
+    "full": "VOLTAGE NOMINAL"
+  },
+  {
+    "abv": "V-O/P",
+    "full": "VOLTAGE OUTPUT"
+  },
+  {
+    "abv": "VOL",
+    "full": "VOLUME"
+  },
+  {
+    "abv": "VOLM",
+    "full": "VOLUMETRIC"
+  },
+  {
+    "abv": "VOLT",
+    "full": "VOLTAGE"
+  },
+  {
+    "abv": "V-RTG",
+    "full": "VOLTAGE RATING"
+  },
+  {
+    "abv": "VSD",
+    "full": "VARIABLE SPEED DRIVE"
+  },
+  {
+    "abv": "V-SPL",
+    "full": "POWER SUPPLY"
+  },
+  {
+    "abv": "W",
+    "full": "WATT"
+  },
+  {
+    "abv": "W/H",
+    "full": "WATT HOUR"
+  },
+  {
+    "abv": "W/O",
+    "full": "WITHOUT"
+  },
+  {
+    "abv": "W/PROOF",
+    "full": "WATERPROOF"
+  },
+  {
+    "abv": "W/V",
+    "full": "WEIGHT PER VOLUME"
+  },
+  {
+    "abv": "W/W",
+    "full": "WEIGHT PER WEIGHT"
+  },
+  {
+    "abv": "WASTPPR",
+    "full": "WASTEPAPER"
+  },
+  {
+    "abv": "WC",
+    "full": "WATER CLOSET"
+  },
+  {
+    "abv": "WD",
+    "full": "WIDTH"
+  },
+  {
+    "abv": "WELD",
+    "full": "WELDING"
+  },
+  {
+    "abv": "WG",
+    "full": "WATER GAUGE"
+  },
+  {
+    "abv": "WHT",
+    "full": "WHITE"
+  },
+  {
+    "abv": "WHTMTL",
+    "full": "WHITE METAL"
+  },
+  {
+    "abv": "WKG",
+    "full": "WORKING"
+  },
+  {
+    "abv": "WLL",
+    "full": "WORKING LOAD LIMIT"
+  },
+  {
+    "abv": "WOG",
+    "full": "WATER OIL GAS"
+  },
+  {
+    "abv": "WOODWKG",
+    "full": "WOODWORKING"
+  },
+  {
+    "abv": "WP",
+    "full": "WORKING PRESSURE"
+  },
+  {
+    "abv": "WRC",
+    "full": "WIRE ROPE CORE"
+  },
+  {
+    "abv": "WT",
+    "full": "WEIGHT"
+  },
+  {
+    "abv": "WTP",
+    "full": "WATER TREATMENT PLANT"
+  },
+  {
+    "abv": "WTR",
+    "full": "WATER"
+  },
+  {
+    "abv": "WW",
+    "full": "WIREWOUND"
+  },
+  {
+    "abv": "X",
+    "full": "TIMES"
+  },
+  {
+    "abv": "XL",
+    "full": "EXTRA LARGE"
+  },
+  {
+    "abv": "XLPE",
+    "full": "CROSS-LINKED POLYETHYLENE"
+  },
+  {
+    "abv": "XOS",
+    "full": "EXTRA OVERSIZE"
+  },
+  {
+    "abv": "XS",
+    "full": "EXTRA SMALL"
+  },
+  {
+    "abv": "XXL",
+    "full": "EXTRA EXTRA LARGE"
+  },
+  {
+    "abv": "XXOS",
+    "full": "EXTRA EXTRA OVERSIZE"
+  },
+  {
+    "abv": "XXS",
+    "full": "DOUBLE EXTRA STRONG"
+  },
+  {
+    "abv": "XXXL",
+    "full": "EXTRA EXTRA EXTRA LARGE"
+  },
+  {
+    "abv": "XXXXL",
+    "full": "EXTRA EXTRA EXTRA EXTRA LARGE"
+  },
+  {
+    "abv": "Y3",
+    "full": "CUBIC YARD"
+  },
+  {
+    "abv": "YD",
+    "full": "YARD"
+  },
+  {
+    "abv": "YD2",
+    "full": "SQUARE YARD"
+  },
+  {
+    "abv": "YLW",
+    "full": "YELLOW"
+  },
+  {
+    "abv": "YR",
+    "full": "YEAR"
+  },
+  {
+    "abv": "YS",
+    "full": "YIELD STRENGTH"
+  },
+  {
+    "abv": "Z",
+    "full": "IMPEDANCE"
+  },
+  {
+    "abv": "ZP",
+    "full": "ZINC PLATED"
+  }
+],
+  TEMPLATES: [
+  {
+    "code": "UNT",
+    "name": "Unit Item Template",
+    "prefix": "UNT-",
+    "mandatory": [
+      "noun",
+      "manufacture",
+      "part_or_model"
+    ],
+    "recommended": [
+      "characteristics",
+      "uom"
+    ],
+    "default_uom": "UNT",
+    "desc": "Noun + Modifier(s) + Characteristics/Rating + Manufacturer + Model/Part No. UoM selalu UNT."
+  },
+  {
+    "code": "OEM",
+    "name": "OEM Item Template",
+    "prefix": "OEM-",
+    "mandatory": [
+      "noun",
+      "manufacture",
+      "part_no",
+      "equipment_ref"
+    ],
+    "recommended": [
+      "drawing_no",
+      "pos_no"
+    ],
+    "default_uom": null,
+    "desc": "Noun + Equipment Name + Equipment Ref (Model/Dwg/Pos) + Manufacturer + Part Number."
+  },
+  {
+    "code": "GEN",
+    "name": "General Item Template",
+    "prefix": "GEN-",
+    "mandatory": [
+      "noun",
+      "size_or_specs"
+    ],
+    "recommended": [
+      "material",
+      "modifiers"
+    ],
+    "default_uom": null,
+    "desc": "Noun + Modifier(s) + Characteristics/Dimensions + Material. Mfr/P/N tidak wajib."
+  },
+  {
+    "code": "SPC",
+    "name": "Specific Item Template",
+    "prefix": "SPC-",
+    "mandatory": [
+      "noun",
+      "manufacture",
+      "part_no",
+      "equipment_ref"
+    ],
+    "recommended": [
+      "characteristics"
+    ],
+    "default_uom": null,
+    "desc": "Noun + Modifier(s) + Characteristics + Equipment Name + Manufacturer + Part Number."
+  },
+  {
+    "code": "STR",
+    "name": "Construction Item Template",
+    "prefix": "STR-",
+    "mandatory": [
+      "noun",
+      "size_or_specs",
+      "material"
+    ],
+    "recommended": [
+      "class_or_grade"
+    ],
+    "default_uom": null,
+    "desc": "Noun + Modifier(s) + Dimensions + Material + Class/Grade/Schedule."
+  },
+  {
+    "code": "MIS",
+    "name": "Non-Inventory Item Template",
+    "prefix": "MIS-",
+    "mandatory": [
+      "noun"
+    ],
+    "recommended": [
+      "manufacture",
+      "size_or_specs"
+    ],
+    "default_uom": null,
+    "desc": "Noun + Modifiers (opsional) + Specs (opsional) + Mfr (opsional)."
+  },
+  {
+    "code": "MFG",
+    "name": "Manufacturing Item Template",
+    "prefix": "MFG-",
+    "mandatory": [
+      "noun",
+      "manufacture",
+      "part_or_model"
+    ],
+    "recommended": [
+      "modifiers",
+      "characteristics"
+    ],
+    "default_uom": null,
+    "desc": "Noun + Modifiers + Other Info + Manufacturer + Part Number."
+  },
+  {
+    "code": "SVC",
+    "name": "Service Item Template",
+    "prefix": "SVC-",
+    "mandatory": [
+      "service_prefix",
+      "job_type",
+      "scope_of_work"
+    ],
+    "recommended": [
+      "equipment_name"
+    ],
+    "default_uom": "JOB",
+    "desc": "SERVICE: + Job Type + Equipment Name (Optional) + Scope of Work + ATTACHED (Optional)."
+  }
+]
+};
+
+;
+/**
+ * =============================================================================
+ * Consistency & Compliance Engine (TEL SCS, NATO ACodP-1, MESC Aligned)
+ * Memeriksa kesesuaian data material master terhadap aturan penulisan:
+ * 1. Aturan Wajib Template (GEN, UNT, OEM, SPC, STR, MIS, MFG, SVC)
+ * 2. Kamus Singkatan Baku (Abbreviation Table)
+ * 3. Format Penulisan (UPPERCASE, Delimiter, Syntax KEY=VALUE)
+ * 4. Pengecekan Placeholder Invalid ('???', '-', 'NONE' pada kolom wajib)
+ * =============================================================================
+ */
+
+(() => {
+  'use strict';
+
+  // Inisialisasi lookup map untuk pencarian O(1)
+  let abvMap = null;
+  let fullToAbvMap = null;
+
+  function initMaps() {
+    if (abvMap && fullToAbvMap) return;
+    abvMap = new Map();
+    fullToAbvMap = new Map();
+
+    const rules = window.CATALOG_RULES || { ABBREVIATIONS: [], TEMPLATES: [] };
+    (rules.ABBREVIATIONS || []).forEach(item => {
+      const a = (item.abv || '').trim().toUpperCase();
+      const f = (item.full || '').trim().toUpperCase();
+      if (a) abvMap.set(a, f);
+      if (f && f.length > 2) fullToAbvMap.set(f, a);
+    });
+  }
+
+  /**
+   * Helper pembersih string
+   */
+  function clean(val) {
+    if (val === null || val === undefined) return '';
+    return String(val).trim();
+  }
+
+  function isBlankOrInvalid(val) {
+    const s = clean(val).toUpperCase();
+    return !s || s === 'NONE' || s === '???' || s === '-' || s === 'NULL' || s === 'N/A';
+  }
+
+  /**
+   * Evaluasi satu baris material
+   * @param {Object} item Objek material (dari Excel atau Database)
+   * @returns {Object} Hasil evaluasi konsistensi dan rekomendasi perbaikan
+   */
+  function auditMaterialRow(item) {
+    initMaps();
+
+    const issues = [];
+    const suggestions = [];
+    let score = 100;
+
+    const rawText = clean(item.item_text_result || item.item_text || item.description || '');
+    const templateCode = clean(item.template_code || '').toUpperCase();
+    const noun = clean(item.major_name || item.noun || '').toUpperCase();
+    const mod1 = clean(item.modifier1 || item.modifier_1 || '').toUpperCase();
+    const mod2 = clean(item.modifier2 || item.modifier_2 || '').toUpperCase();
+    const mod3 = clean(item.modifier3 || item.modifier_3 || '').toUpperCase();
+    const mfr = clean(item.manufacture || item.manufacturer || '').toUpperCase();
+    const dwgNo = clean(item.dwg_no || item.drawing_no || '').toUpperCase();
+    const posNo = clean(item.pos_no || item.position_no || '').toUpperCase();
+    const partNo = clean(item.part_no || item.part_number || '').toUpperCase();
+    const modelNo = clean(item.model_no || '').toUpperCase();
+    const size = clean(item.size || item.dimensions || '').toUpperCase();
+    const matl = clean(item.material || '').toUpperCase();
+    const cls = clean(item.class || item.grade || '').toUpperCase();
+
+    // -------------------------------------------------------------------------
+    // 1. RULE: Pemeriksaan Kapitalisasi (Harus UPPERCASE)
+    // -------------------------------------------------------------------------
+    if (rawText && rawText !== rawText.toUpperCase()) {
+      score -= 5;
+      issues.push({
+        type: 'CASING',
+        severity: 'minor',
+        field: 'item_text_result',
+        message: 'Deskripsi mengandung huruf kecil. Standar SCS mewajibkan SEMUA HURUF KAPITAL (UPPERCASE).'
+      });
+      suggestions.push({
+        field: 'item_text_result',
+        suggested: rawText.toUpperCase(),
+        reason: 'Ubah ke huruf kapital'
+      });
+    }
+
+    // -------------------------------------------------------------------------
+    // 2. RULE: Template Mandatory Fields Check
+    // -------------------------------------------------------------------------
+    const tempPrefix = templateCode.split('-')[0];
+    const templateDef = (window.CATALOG_RULES?.TEMPLATES || []).find(t => t.code === tempPrefix);
+
+    if (!templateCode) {
+      score -= 20;
+      issues.push({
+        type: 'TEMPLATE_MISSING',
+        severity: 'critical',
+        field: 'template_code',
+        message: 'Kode template belum ditentukan (misal: GEN-XX, UNT-XX, OEM-XX, STR-XX).'
+      });
+    } else if (templateDef) {
+      // Validasi kolom wajib per template
+      if (templateDef.code === 'OEM') {
+        if (isBlankOrInvalid(mfr)) {
+          score -= 15;
+          issues.push({
+            type: 'MANDATORY_MISSING',
+            severity: 'critical',
+            field: 'manufacture',
+            message: 'Template OEM wajib memiliki Manufacture/Brand spesifik.'
+          });
+        }
+        if (isBlankOrInvalid(partNo)) {
+          score -= 20;
+          issues.push({
+            type: 'MANDATORY_MISSING',
+            severity: 'critical',
+            field: 'part_no',
+            message: 'Template OEM wajib memiliki Part Number yang valid dari pabrikan.'
+          });
+        }
+        if (isBlankOrInvalid(dwgNo) && isBlankOrInvalid(modelNo)) {
+          score -= 10;
+          issues.push({
+            type: 'MANDATORY_MISSING',
+            severity: 'warning',
+            field: 'dwg_no',
+            message: 'Template OEM membutuhkan referensi alat (Drawing No atau Model No).'
+          });
+        }
+      } else if (templateDef.code === 'UNT') {
+        if (isBlankOrInvalid(mfr)) {
+          score -= 15;
+          issues.push({
+            type: 'MANDATORY_MISSING',
+            severity: 'critical',
+            field: 'manufacture',
+            message: 'Template UNIT wajib memiliki Manufacture/Brand.'
+          });
+        }
+        if (isBlankOrInvalid(partNo) && isBlankOrInvalid(modelNo)) {
+          score -= 15;
+          issues.push({
+            type: 'MANDATORY_MISSING',
+            severity: 'critical',
+            field: 'part_no',
+            message: 'Template UNIT wajib mencantumkan Model Number atau Part Number.'
+          });
+        }
+      } else if (templateDef.code === 'STR') {
+        if (isBlankOrInvalid(size)) {
+          score -= 15;
+          issues.push({
+            type: 'MANDATORY_MISSING',
+            severity: 'critical',
+            field: 'size',
+            message: 'Template Construction (STR) wajib memiliki dimensi/ukuran fisik (Size).'
+          });
+        }
+        if (isBlankOrInvalid(matl)) {
+          score -= 15;
+          issues.push({
+            type: 'MANDATORY_MISSING',
+            severity: 'critical',
+            field: 'material',
+            message: 'Template Construction (STR) wajib mencantumkan jenis material (misal SS316, SS400).'
+          });
+        }
+      } else if (templateDef.code === 'GEN') {
+        if (isBlankOrInvalid(size) && isBlankOrInvalid(rawText)) {
+          score -= 15;
+          issues.push({
+            type: 'MANDATORY_MISSING',
+            severity: 'warning',
+            field: 'size',
+            message: 'Template General (GEN) memerlukan spesifikasi/dimensi teknis.'
+          });
+        }
+      } else if (templateDef.code === 'SVC') {
+        if (!rawText.startsWith('SERVICE:')) {
+          score -= 20;
+          issues.push({
+            type: 'SYNTAX_ERROR',
+            severity: 'critical',
+            field: 'item_text_result',
+            message: 'Template Jasa (SVC) wajib diawali dengan kata "SERVICE: ".'
+          });
+        }
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. RULE: Pemeriksaan Karakter Anomali & Placeholder Tidak Valid ('???', '-')
+    // -------------------------------------------------------------------------
+    [
+      { name: 'dwg_no', val: dwgNo },
+      { name: 'pos_no', val: posNo },
+      { name: 'part_no', val: partNo },
+      { name: 'model_no', val: modelNo }
+    ].forEach(col => {
+      if (col.val.includes('???') || col.val === '??') {
+        score -= 10;
+        issues.push({
+          type: 'INVALID_PLACEHOLDER',
+          severity: 'warning',
+          field: col.name,
+          message: `Kolom ${col.name} berisi placeholder tidak valid ('${col.val}'). Gunakan 'NONE' jika tidak ada.`
+        });
+        suggestions.push({
+          field: col.name,
+          suggested: 'NONE',
+          reason: 'Standardisasi placeholder tidak valid menjadi NONE'
+        });
+      }
+    });
+
+    // -------------------------------------------------------------------------
+    // 4. RULE: Pemeriksaan Konsistensi Delimiter Dimensi (KEY=VALUE vs KEY-VALUE)
+    // -------------------------------------------------------------------------
+    if (rawText) {
+      // Deteksi pola 'CONN 2-3/8' atau sejenisnya di mana seharusnya '='
+      const dashDelimiterRegex = /\b(CONN\s*\d*|DIA|LG|THK|WA|WD|H|W|PITCH|SIZE|OD|ID)-([0-9/])/gi;
+      let match;
+      while ((match = dashDelimiterRegex.exec(rawText)) !== null) {
+        score -= 5;
+        const faultyStr = match[0];
+        const fixedStr = match[1] + '=' + match[2];
+        issues.push({
+          type: 'SYNTAX_DELIMITER',
+          severity: 'minor',
+          field: 'item_text_result',
+          message: `Penulisan atribut '${faultyStr}' tidak konsisten. Gunakan tanda sama dengan ('${fixedStr}').`
+        });
+        suggestions.push({
+          field: 'item_text_result',
+          suggested: rawText.replace(faultyStr, fixedStr),
+          reason: `Ubah '${faultyStr}' menjadi '${fixedStr}'`
+        });
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // 5. RULE: Pemeriksaan Kamus Singkatan (Abbreviation Compliance)
+    // -------------------------------------------------------------------------
+    // Deteksi kata lengkap yang seharusnya disingkat berdasarkan kamus
+    if (rawText) {
+      const words = rawText.split(/[\s,]+/);
+      for (const w of words) {
+        const upperWord = w.toUpperCase();
+        // Cek jika pengguna menulis kata panjang yang memiliki singkatan baku
+        if (fullToAbvMap.has(upperWord)) {
+          const recommendedAbv = fullToAbvMap.get(upperWord);
+          // Kecualikan kata-kata umum pendek yang ambigu
+          if (upperWord.length > 4 && recommendedAbv !== upperWord) {
+            score -= 3;
+            issues.push({
+              type: 'ABBREVIATION_VIOLATION',
+              severity: 'info',
+              field: 'item_text_result',
+              message: `Kata '${upperWord}' dapat disingkat menjadi '${recommendedAbv}' sesuai kamus SCS.`
+            });
+          }
+        }
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // 6. RULE: Deteksi Typo Spesifik yang Teridentifikasi di Data Sampel
+    // -------------------------------------------------------------------------
+    const commonTypos = [
+      { wrong: 'COPLING', right: 'COUPLING', field: 'major_name' },
+      { wrong: 'CLIB', right: 'CLIP', field: 'modifier1' },
+      { wrong: 'GREATHER', right: 'GREATER', field: 'item_text_result' },
+      { wrong: 'REINFORCEED', right: 'REINFORCED', field: 'item_text_result' },
+      { wrong: 'ENVIRONTMENTAL', right: 'ENVIRONMENTAL', field: 'item_text_result' },
+      { wrong: 'GALVANIZE', right: 'GALV', field: 'material' }
+    ];
+
+    commonTypos.forEach(t => {
+      const regex = new RegExp(`\\b${t.wrong}\\b`, 'i');
+      if (regex.test(rawText) || regex.test(noun) || regex.test(mod1) || regex.test(matl)) {
+        score -= 8;
+        issues.push({
+          type: 'SPELLING_TYPO',
+          severity: 'warning',
+          field: t.field,
+          message: `Ditemukan ejaan/typo: '${t.wrong}'. Seharusnya '${t.right}'.`
+        });
+        suggestions.push({
+          field: t.field,
+          suggested: t.right,
+          reason: `Koreksi typo '${t.wrong}' -> '${t.right}'`
+        });
+      }
+    });
+
+    // Batasi skor minimum 0 dan maksimum 100
+    score = Math.max(0, Math.min(100, Math.round(score)));
+
+    let status = 'COMPLIANT';
+    if (score < 60) status = 'NON_COMPLIANT';
+    else if (score < 90) status = 'WARNING';
+
+    return {
+      material_id: item.id || item.part_no || item.major_name || '-',
+      item_text: rawText,
+      template_code: templateCode,
+      score,
+      status,
+      issue_count: issues.length,
+      issues,
+      suggestions
+    };
+  }
+
+  /**
+   * Evaluasi Batch Dataset Material Master
+   */
+  function auditCatalogDataset(rows) {
+    if (!Array.isArray(rows)) return { summary: {}, results: [] };
+
+    const results = rows.map(r => auditMaterialRow(r));
+
+    let totalScore = 0;
+    let compliantCount = 0;
+    let warningCount = 0;
+    let nonCompliantCount = 0;
+    let typoCount = 0;
+    let mandatoryMissingCount = 0;
+
+    results.forEach(res => {
+      totalScore += res.score;
+      if (res.status === 'COMPLIANT') compliantCount++;
+      else if (res.status === 'WARNING') warningCount++;
+      else nonCompliantCount++;
+
+      res.issues.forEach(iss => {
+        if (iss.type === 'SPELLING_TYPO') typoCount++;
+        if (iss.type === 'MANDATORY_MISSING' || iss.type === 'TEMPLATE_MISSING') mandatoryMissingCount++;
+      });
+    });
+
+    const total = results.length;
+    const avgScore = total > 0 ? Math.round(totalScore / total) : 100;
+
+    return {
+      summary: {
+        total_items: total,
+        avg_score: avgScore,
+        compliant_count: compliantCount,
+        warning_count: warningCount,
+        non_compliant_count: nonCompliantCount,
+        typo_count: typoCount,
+        mandatory_missing_count: mandatoryMissingCount,
+        compliance_rate: total > 0 ? Math.round((compliantCount / total) * 100) : 100
+      },
+      results
+    };
+  }
+
+  // Export ke global window
+  window.ConsistencyEngine = {
+    auditMaterialRow,
+    auditCatalogDataset
+  };
+
+})();
+
+;
+(() => {
+  'use strict';
+
+  const DEFAULT_GUEST_ACCESS = {
+    role: 'GUEST',
+    allowed_menus: ['dashboard', 'materials', 'similarity', 'consistency', 'reports', 'settings'],
+    can_upload: false,
+    can_run_ai: false,
+    can_merge: false,
+    can_manage_settings: false,
+    can_review: false,
+    can_run_consistency: false,
+    can_export_consistency: false
+  };
 
   const state = {
     page: 1,
@@ -9,7 +5905,7 @@
     parsedRows: [],
     chart: null,
     configured: false,
-    supabaseUrl: 'https://tayybadwfypmedjixemd.supabase.co',
+    supabaseUrl: window.APP_CONFIG?.SUPABASE_URL || '',
     duplicates: [],
     similarities: [],
     activeDuplicate: null,
@@ -18,16 +5914,10 @@
       username: 'guest',
       fullName: 'Pengunjung (Guest)'
     },
-    accessControl: {
-      role: 'GUEST',
-      allowed_menus: ['dashboard', 'materials', 'similarity'],
-      can_upload: false,
-      can_run_ai: false,
-      can_merge: false,
-      can_manage_settings: false
-    },
+    accessControl: Object.assign({}, DEFAULT_GUEST_ACCESS),
     allRoles: [],
-    users: []
+    users: [],
+    consistencyData: []
   };
 
   const titles = {
@@ -36,6 +5926,7 @@
     materials: 'Material Master',
     duplicates: 'Duplicate Review',
     similarity: 'Similar Material',
+    consistency: 'Cek Konsistensi & Standar Katalog',
     reports: 'Laporan Efisiensi Approved Duplicates',
     users: 'User & Hak Akses (RBAC)',
     settings: 'Pengaturan'
@@ -108,62 +5999,85 @@
   }
 
   function isMenuAllowed(section) {
-    if (state.currentUser.role === 'ADMIN') return true;
-    if (section === 'reports') return true;
-    const allowed = state.accessControl?.allowed_menus || ['dashboard', 'materials', 'similarity', 'reports'];
-    return allowed.includes(section);
+    return AccessPolicy.normalize(state.currentUser.role, state.accessControl).allowed_menus.includes(section);
+  }
+
+  function canAction(action, args = []) {
+    return AccessPolicy.allows(state.currentUser.role, state.accessControl, action, args);
+  }
+
+  function requireAction(action, args = []) {
+    if (canAction(action, args)) return true;
+    toast('Anda tidak memiliki izin untuk tindakan ini.', 'error');
+    return false;
   }
 
   function applyAccessControl() {
-    const isAdm = (state.currentUser.role === 'ADMIN');
-    const allowedMenus = state.accessControl?.allowed_menus || ['dashboard', 'materials', 'similarity', 'reports'];
-
-    // Update Sidebar Navigation Items
+    const role = String(state.currentUser?.role || 'GUEST').toUpperCase();
+    const loggedIn = Boolean(
+      (state.currentUser?.token || (state.currentUser?.username && role !== 'GUEST')) &&
+      role !== 'GUEST'
+    );
     document.querySelectorAll('.nav-item').forEach(el => {
-      const sec = el.dataset.section;
-      const allowed = isAdm || sec === 'reports' || allowedMenus.includes(sec);
+      const allowed = isMenuAllowed(el.dataset.section);
       el.classList.toggle('locked', !allowed);
+      el.setAttribute('aria-disabled', String(!allowed));
     });
-
-    // Update Topbar User Chip & Action Buttons
-    const userChip = $('userChip');
-    const userNameEl = $('currentUser');
-    const loginBtn = $('openLoginModalBtn');
-    const logoutBtn = $('logoutBtn');
-    const sidebarLogoutBtn = $('sidebarLogoutBtn');
-    const roleLabel = $('sidebarRoleLabel');
-
-    if (isAdm) {
-      if (userChip) userChip.classList.add('admin');
-      if (userNameEl) userNameEl.textContent = (state.currentUser.fullName || 'Admin') + ' (Admin)';
-      if (loginBtn) loginBtn.classList.add('d-none');
-      if (logoutBtn) logoutBtn.classList.remove('d-none');
-      if (sidebarLogoutBtn) sidebarLogoutBtn.classList.remove('d-none');
-      if (roleLabel) roleLabel.innerHTML = '<i class="bi bi-shield-check text-accent me-1"></i>Administrator';
-    } else {
-      if (userChip) userChip.classList.remove('admin');
-      if (userNameEl) userNameEl.textContent = 'Pengunjung (Guest)';
-      if (loginBtn) loginBtn.classList.remove('d-none');
-      if (logoutBtn) logoutBtn.classList.add('d-none');
-      if (sidebarLogoutBtn) sidebarLogoutBtn.classList.add('d-none');
-      if (roleLabel) roleLabel.innerHTML = '<i class="bi bi-person me-1"></i>Mode Pengunjung (Guest)';
+    if ($('userChip')) {
+      $('userChip').classList.toggle('admin', role === 'ADMIN');
+      $('userChip').classList.toggle('operator', role === 'OPERATOR');
     }
-
-    // Aksi tombol khusus
-    if ($('runAiAnalysisBtn')) {
-      const canRunAi = isAdm || Boolean(state.accessControl?.can_run_ai);
-      $('runAiAnalysisBtn').classList.toggle('d-none', !canRunAi);
+    if ($('userChipIcon')) {
+      if (role === 'ADMIN') {
+        $('userChipIcon').className = 'bi bi-shield-check me-1 text-accent';
+      } else if (role === 'OPERATOR') {
+        $('userChipIcon').className = 'bi bi-person-badge me-1 text-primary';
+      } else {
+        $('userChipIcon').className = 'bi bi-person-circle me-1';
+      }
     }
-    if ($('btnMergeDuplicate')) {
-      const canMerge = isAdm || Boolean(state.accessControl?.can_merge);
-      $('btnMergeDuplicate').classList.toggle('d-none', !canMerge);
+    if ($('currentUser')) {
+      $('currentUser').textContent = loggedIn
+        ? `${state.currentUser.full_name || state.currentUser.fullName || state.currentUser.username} (${role})` : 'Pengunjung (Guest)';
+    }
+    if ($('sidebarRoleLabel')) {
+      if (!loggedIn || role === 'GUEST') {
+        $('sidebarRoleLabel').innerHTML = '<i class="bi bi-person me-1"></i>Mode Pengunjung (Guest)';
+      } else if (role === 'ADMIN') {
+        $('sidebarRoleLabel').innerHTML = '<i class="bi bi-shield-check text-accent me-1"></i>ADMINISTRATOR';
+      } else if (role === 'OPERATOR') {
+        $('sidebarRoleLabel').innerHTML = '<i class="bi bi-person-badge text-primary me-1"></i>OPERATOR';
+      } else {
+        $('sidebarRoleLabel').innerHTML = `<i class="bi bi-person-badge me-1"></i>${escapeHtml(role)}`;
+      }
+    }
+    if ($('openLoginModalBtn')) $('openLoginModalBtn').classList.toggle('d-none', loggedIn);
+    ['logoutBtn', 'sidebarLogoutBtn'].forEach(id => { if ($(id)) $(id).classList.toggle('d-none', !loggedIn); });
+    updateReportUserMeta();
+    const actions = {
+      uploadBtn: ['uploadMaterials'], runAiAnalysisBtn: ['runAICleansingAnalysis'],
+      btnMergeDuplicate: ['saveDuplicateDecision', ['', 'MERGE_AND_OBSOLETE']],
+      btnConfirmDuplicate: ['saveDuplicateDecision', ['', 'APPROVED_DUPLICATE']],
+      btnRejectDuplicate: ['saveDuplicateDecision', ['', 'REJECTED_DIFFERENT']],
+      runConsistencyAuditBtn: ['getConsistencyMaterials'], exportConsistencyBtn: ['authorizeConsistencyExport'],
+      saveConfigBtn: ['setupSupabaseConfig'], testConnectionBtn: ['testSupabaseConnection']
+    };
+    Object.entries(actions).forEach(([id, [action, args]]) => {
+      if ($(id)) $(id).classList.toggle('d-none', !canAction(action, args));
+    });
+    const active = document.querySelector('.content-section.active');
+    if (active && !isMenuAllowed(active.id.replace('section-', ''))) {
+      active.classList.remove('active');
+      const first = AccessPolicy.normalize(role, state.accessControl).allowed_menus[0];
+      if (first) navigateTo(first);
     }
   }
 
   function navigateTo(section) {
+    if (!section) return;
     if (!isMenuAllowed(section)) {
-      toast(`Menu "${titles[section] || section}" memerlukan login Admin. Silakan login sebagai Admin untuk mengakses menu ini.`, 'error');
-      openAdminLoginModal();
+      toast(`Anda tidak memiliki akses ke menu "${titles[section] || section}". Silakan login terlebih dahulu.`, 'error');
+      if (!state.currentUser.token) openAdminLoginModal();
       return;
     }
 
@@ -176,13 +6090,17 @@
     if ($('pageTitle')) $('pageTitle').textContent = titles[section] || 'Aplikasi';
     if ($('sidebar')) $('sidebar').classList.remove('open');
 
+    try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (_) {}
+
     if (section === 'dashboard') loadDashboard();
     if (section === 'materials') loadMaterials();
     if (section === 'duplicates') loadDuplicates();
     if (section === 'similarity') loadSimilarity();
+    if (section === 'consistency') loadConsistencyView();
     if (section === 'reports') loadApprovedReport();
     if (section === 'upload') loadUploadHistory();
     if (section === 'users') loadUserManagement();
+    if (section === 'settings') populateSupabaseInputs();
   }
 
   window.navigateToSection = navigateTo;
@@ -191,37 +6109,71 @@
    * Inisialisasi Aplikasi
    */
   async function init() {
-    restoreAdminSession();
+    await restoreAdminSession();
     bindEvents();
     restoreTheme();
     await checkAppStatus();
     await loadAccessControl();
     applyAccessControl();
-    loadDashboard();
+    if (isMenuAllowed('dashboard')) loadDashboard();
   }
 
-  function restoreAdminSession() {
+  async function restoreAdminSession() {
     try {
-      const saved = sessionStorage.getItem('admin_session');
-      if (saved) {
-        const u = JSON.parse(saved);
-        if (u && u.role === 'ADMIN') {
-          state.currentUser = u;
-          if (u.permissions) state.accessControl = u.permissions;
-        }
+      const saved = JSON.parse(sessionStorage.getItem('admin_session') || 'null');
+      if (saved && (saved.token || (saved.role && String(saved.role).toUpperCase() !== 'GUEST'))) {
+        saved.role = String(saved.role || 'GUEST').toUpperCase();
+        state.currentUser = saved;
+        state.accessControl = saved.permissions || {};
+        try {
+          const result = await callServer('getSession');
+          if (result && result.data && result.data.role) {
+            result.data.role = String(result.data.role).toUpperCase();
+            state.currentUser = Object.assign({}, saved, result.data);
+            state.accessControl = result.data.permissions || saved.permissions || {};
+            sessionStorage.setItem('admin_session', JSON.stringify(state.currentUser));
+          }
+        } catch (_) {}
+      } else {
+        sessionStorage.removeItem('admin_session');
+        state.currentUser = { username: 'guest', role: 'GUEST' };
+        state.accessControl = Object.assign({}, DEFAULT_GUEST_ACCESS);
       }
-    } catch (_) {}
+    } catch (_) {
+      sessionStorage.removeItem('admin_session');
+      state.currentUser = { username: 'guest', role: 'GUEST' };
+      state.accessControl = Object.assign({}, DEFAULT_GUEST_ACCESS);
+    }
   }
 
   async function loadAccessControl() {
     try {
       const r = await callServer('getSystemAccessControl');
-      const d = r.data || {};
+      const d = r && r.data ? r.data : {};
       state.allRoles = d.allRoles || [];
-      if (state.currentUser.role === 'GUEST') {
-        state.accessControl = d.guestPermissions || state.accessControl;
+      const role = String(state.currentUser?.role || 'GUEST').toUpperCase();
+      const hasSession = Boolean(state.currentUser?.token || (state.currentUser?.username && role !== 'GUEST'));
+
+      if (!hasSession) {
+        state.accessControl = (d.guestPermissions && Array.isArray(d.guestPermissions.allowed_menus) && d.guestPermissions.allowed_menus.length > 0)
+          ? d.guestPermissions
+          : Object.assign({}, DEFAULT_GUEST_ACCESS);
+      } else if (!state.currentUser?.permissions || !Object.keys(state.currentUser.permissions).length) {
+        try {
+          const session = await callServer('getSession');
+          if (session && session.data && session.data.role) {
+            session.data.role = String(session.data.role).toUpperCase();
+            state.currentUser = Object.assign({}, state.currentUser, session.data);
+            state.accessControl = session.data.permissions || state.accessControl || {};
+          }
+        } catch (_) {}
       }
-    } catch (_) {}
+    } catch (_) {
+      const role = String(state.currentUser?.role || 'GUEST').toUpperCase();
+      if (!state.currentUser?.token && role === 'GUEST') {
+        state.accessControl = Object.assign({}, DEFAULT_GUEST_ACCESS);
+      }
+    }
   }
 
   async function checkAppStatus() {
@@ -231,7 +6183,6 @@
       state.configured = Boolean(d.configured && d.connectionOk);
       state.supabaseUrl = d.url || state.supabaseUrl;
 
-      if ($('currentUser')) $('currentUser').textContent = d.userEmail || 'GAS User';
       updateConnectionUI(state.configured, d.connMessage, state.supabaseUrl);
 
       if (!state.configured && !d.configured) {
@@ -253,9 +6204,18 @@
     $('menuToggle').addEventListener('click', () => $('sidebar').classList.toggle('open'));
     $('themeToggle').addEventListener('click', toggleTheme);
 
+    // Consistency Audit Actions
+    if ($('runConsistencyAuditBtn')) $('runConsistencyAuditBtn').addEventListener('click', runConsistencyAudit);
+    if ($('exportConsistencyBtn')) $('exportConsistencyBtn').addEventListener('click', exportConsistencyExcel);
+    if ($('consistencyStatusFilter')) $('consistencyStatusFilter').addEventListener('change', renderConsistencyTable);
+    if ($('consistencyTemplateFilter')) $('consistencyTemplateFilter').addEventListener('change', renderConsistencyTable);
+    if ($('consistencySearchInput')) $('consistencySearchInput').addEventListener('input', debounce(renderConsistencyTable, 300));
+    if ($('abvSearchInput')) $('abvSearchInput').addEventListener('input', debounce(renderAbbreviationModalTable, 250));
+
     // Upload
     $('materialFile').addEventListener('change', handleFile);
     $('uploadBtn').addEventListener('click', uploadFile);
+    if ($('cancelUploadBtn')) $('cancelUploadBtn').addEventListener('click', cancelUploadFile);
     $('downloadTemplate').addEventListener('click', downloadTemplate);
 
     // Material Master
@@ -371,6 +6331,7 @@
   }
 
   async function handleSaveConfig() {
+    if (!requireAction('setupSupabaseConfig')) return;
     const gasUrl = $('gasUrlInput') ? $('gasUrlInput').value.trim() : '';
     const url = $('supabaseUrlInput').value.trim();
     const key = $('supabaseKeyInput').value.trim();
@@ -411,6 +6372,7 @@
   }
 
   async function handleTestConnection() {
+    if (!requireAction('testSupabaseConnection')) return;
     try {
       showLoading(true, 'Menguji koneksi ke Supabase...');
       const r = await callServer('testSupabaseConnection');
@@ -448,11 +6410,15 @@
     }
 
     try {
-      showLoading(true, 'Memverifikasi akun Administrator...');
+      showLoading(true, 'Memverifikasi akun pengguna...');
       const r = await callServer('loginUser', u, p);
-      const user = r.data;
-      if (user && !user.full_name && user.fullName) {
+      const user = r.data || {};
+      if (!user.full_name && user.fullName) {
         user.full_name = user.fullName;
+      }
+      user.role = String(user.role || 'OPERATOR').toUpperCase();
+      if (!user.token) {
+        user.token = 'session_' + (user.id || user.username || 'user') + '_' + Date.now();
       }
       state.configured = true;
       state.currentUser = user;
@@ -464,11 +6430,12 @@
         bootstrap.Modal.getInstance(modalEl)?.hide();
       }
 
-      updateConnectionUI(true, 'Terhubung ke Supabase PostgreSQL', state.supabaseUrl);
+      updateConnectionUI(true, 'Terhubung via Google Apps Script Web App', state.supabaseUrl);
+      applyAccessControl();
       await loadAccessControl();
       applyAccessControl();
-      toast(`Selamat datang kembali, ${user.full_name || user.fullName || user.username}! Anda masuk sebagai Administrator.`, 'success');
-      loadDashboard();
+      toast(`Selamat datang kembali, ${user.full_name || user.fullName || user.username}! Anda masuk sebagai ${user.role}.`, 'success');
+      if (isMenuAllowed('dashboard')) navigateTo('dashboard');
     } catch (err) {
       toast('Login gagal: ' + err.message, 'error');
     } finally {
@@ -476,7 +6443,8 @@
     }
   }
 
-  function executeLogout() {
+  async function executeLogout() {
+    try { await callServer('logoutUser'); } catch (error) { toast('Sesi server tidak dapat diakhiri: ' + error.message, 'error'); }
     const modalEl = $('logoutModal');
     if (modalEl && typeof bootstrap !== 'undefined') {
       const m = bootstrap.Modal.getInstance(modalEl);
@@ -484,10 +6452,17 @@
     }
     sessionStorage.removeItem('admin_session');
     state.currentUser = { username: 'guest', full_name: 'Pengunjung', role: 'GUEST' };
+    state.accessControl = Object.assign({}, DEFAULT_GUEST_ACCESS);
+    state.consistencyData = [];
+    state.consistencySummary = null;
+    state.duplicates = [];
+    state.similarities = [];
+    state.reportData = null;
+    ['consistencyTableBody', 'materialsBody', 'duplicatesBody', 'similarityBody'].forEach(id => { if ($(id)) $(id).textContent = ''; });
     loadAccessControl().then(() => {
       applyAccessControl();
-      navigateTo('dashboard');
-      toast('Anda telah keluar dari akun Administrator. Sekarang dalam Mode Pengunjung (Guest).', 'info');
+      if (isMenuAllowed('dashboard')) navigateTo('dashboard');
+      toast('Anda telah keluar dari akun. Sekarang dalam Mode Pengunjung (Guest).', 'info');
     });
   }
 
@@ -592,17 +6567,142 @@
     $('fileInfo').textContent = `${f.name} • ${(f.size / 1024 / 1024).toFixed(2)} MB`;
 
     try {
-      showLoading(true, 'Membaca spreadsheet...');
-      state.parsedRows = await parseSpreadsheet(f);
-      showLoading(false);
+      showLoading(true, 'Membaca spreadsheet & menjalankan Pra-Audit Konsistensi...');
+      const rawRows = await parseSpreadsheet(f);
 
-      if (state.parsedRows.length > 100000) throw new Error('Record melebihi batas 100.000 baris.');
+      if (rawRows.length > 100000) throw new Error('Record melebihi batas 100.000 baris.');
+
+      // Validasi & Auto-generate material_code jika belum ada
+      state.parsedRows = rawRows.map((r, i) => {
+        const item = { ...r };
+        if (!item.material_code && !item.material_number) {
+          // Buat identifier sementara berbasis Part No / Noun / Index
+          const cleanPn = String(item.part_number || '').trim().replace(/[^a-zA-Z0-9]/g, '');
+          item.material_code = cleanPn ? `PN-${cleanPn}` : `MAT-${100000 + i + 1}`;
+        }
+        return item;
+      });
+
+      // Jalankan Gatekeeper Consistency Pre-Audit
+      runPreUploadGatekeeperAudit(state.parsedRows);
+
+      showLoading(false);
       $('uploadBtn').disabled = false;
-      toast(`${fmt(state.parsedRows.length)} record siap divalidasi & diupload.`);
+      if ($('cancelUploadBtn')) $('cancelUploadBtn').classList.remove('d-none');
+      toast(`${fmt(state.parsedRows.length)} record berhasil dipindai & dinilai konsistensinya.`);
     } catch (err) {
       showLoading(false);
       $('uploadBtn').disabled = true;
+      if ($('cancelUploadBtn')) $('cancelUploadBtn').classList.add('d-none');
       toast(err.message, 'error');
+    }
+  }
+
+  function cancelUploadFile() {
+    $('materialFile').value = '';
+    state.selectedFile = null;
+    state.parsedRows = [];
+    $('fileInfo').classList.add('d-none');
+    $('uploadBtn').disabled = true;
+    if ($('cancelUploadBtn')) $('cancelUploadBtn').classList.add('d-none');
+    if ($('preUploadAuditBox')) $('preUploadAuditBox').classList.add('d-none');
+    toast('Pemilihan file dibatalkan.', 'info');
+  }
+
+  function runPreUploadGatekeeperAudit(rows = []) {
+    const box = $('preUploadAuditBox');
+    if (!box || !window.ConsistencyEngine) return;
+
+    box.classList.remove('d-none');
+
+    // Normalisasi format untuk validator
+    const normalizedRows = rows.map((row, idx) => {
+      const desc = (row.material_description || row.item_text_result || '').trim();
+      const firstSegment = desc.split(',')[0] || '';
+      return {
+        id: row.material_code || `Row-${idx + 1}`,
+        material_code: row.material_code || `Row-${idx + 1}`,
+        item_text_result: desc,
+        template_code: row.template_code || '',
+        major_name: row.noun || row.major_name || firstSegment,
+        modifier1: row.modifier1 || '',
+        modifier2: row.modifier2 || '',
+        modifier3: row.modifier3 || '',
+        manufacture: row.manufacturer || row.manufacture || '',
+        part_no: row.part_number || row.part_no || '',
+        model_no: row.model_no || '',
+        dwg_no: row.dwg_no || '',
+        pos_no: row.pos_no || '',
+        size: row.size || '',
+        material: row.material || '',
+        class: row.class || ''
+      };
+    });
+
+    const audit = window.ConsistencyEngine.auditCatalogDataset(normalizedRows);
+    const summary = audit.summary;
+
+    if ($('preUploadScore')) $('preUploadScore').textContent = `${summary.avg_score}%`;
+    if ($('preUploadCompliant')) $('preUploadCompliant').textContent = fmt(summary.compliant_count);
+    if ($('preUploadWarning')) $('preUploadWarning').textContent = fmt(summary.warning_count);
+    if ($('preUploadCritical')) $('preUploadCritical').textContent = fmt(summary.non_compliant_count);
+
+    const badge = $('preUploadGatekeeperBadge');
+    const warningAlert = $('preUploadWarningAlert');
+    const warningText = $('preUploadWarningText');
+
+    if (summary.avg_score >= 85 && summary.non_compliant_count === 0) {
+      if (badge) {
+        badge.className = 'badge bg-success';
+        badge.innerHTML = '<i class="bi bi-shield-check me-1"></i>LOLOS STANDAR (EXCELLENT)';
+      }
+      if (warningAlert) warningAlert.classList.add('d-none');
+    } else if (summary.non_compliant_count > 0) {
+      if (badge) {
+        badge.className = 'badge bg-danger';
+        badge.innerHTML = `<i class="bi bi-shield-slash me-1"></i>PERHATIAN: ${fmt(summary.non_compliant_count)} DATA KRITIS`;
+      }
+      if (warningAlert) {
+        warningAlert.classList.remove('d-none');
+        if (warningText) {
+          warningText.innerHTML = `Terdeteksi <strong>${fmt(summary.non_compliant_count)} baris</strong> data tidak memenuhi syarat wajib template (misal: part number/manufacturer kosong pada template OEM, atau typo fatal).`;
+        }
+      }
+    } else {
+      if (badge) {
+        badge.className = 'badge bg-warning text-dark';
+        badge.innerHTML = '<i class="bi bi-shield-exclamation me-1"></i>PERINGATAN (WARNING)';
+      }
+      if (warningAlert) {
+        warningAlert.classList.remove('d-none');
+        if (warningText) {
+          warningText.innerHTML = 'Data secara umum memenuhi format, namun memiliki beberapa singkatan yang tidak baku atau format pemisah atribut kurang konsisten.';
+        }
+      }
+    }
+
+    // Render Preview Sampel (Maksimal 10 Baris Pertama)
+    const previewBody = $('preUploadPreviewBody');
+    if (previewBody) {
+      const sample = audit.results.slice(0, 10);
+      previewBody.innerHTML = sample.map((item, idx) => {
+        const statusBadge = item.status === 'COMPLIANT' ? 'bg-success' :
+                            item.status === 'WARNING' ? 'bg-warning text-dark' : 'bg-danger';
+        const note = item.issues.length ? item.issues[0].message : 'Format konsisten';
+        return `
+          <tr>
+            <td>${idx + 1}</td>
+            <td><strong>${escapeHtml(item.material_id)}</strong></td>
+            <td>
+              <div class="text-truncate" style="max-width: 250px;">${escapeHtml(item.item_text)}</div>
+              <small class="badge bg-secondary" style="font-size: 9px;">${escapeHtml(item.template_code)}</small>
+            </td>
+            <td><strong>${item.score}%</strong></td>
+            <td><span class="badge ${statusBadge}">${item.status}</span></td>
+            <td><small class="text-muted text-truncate d-block" style="max-width: 200px;" title="${escapeHtml(note)}">${escapeHtml(note)}</small></td>
+          </tr>
+        `;
+      }).join('');
     }
   }
 
@@ -633,13 +6733,24 @@
         material_number: 'material_code',
         kode_material: 'material_code',
         description: 'material_description',
+        item_text_result: 'material_description',
+        item_text: 'material_description',
         material_desc: 'material_description',
         deskripsi: 'material_description',
         brand: 'manufacturer',
+        manufacture: 'manufacturer',
         mfr: 'manufacturer',
         pabrikan: 'manufacturer',
         part_no: 'part_number',
         nomor_part: 'part_number',
+        major_name: 'noun',
+        major_name_noun: 'noun',
+        noun: 'noun',
+        modifier_1: 'modifier1',
+        modifier_2: 'modifier2',
+        modifier_3: 'modifier3',
+        template: 'template_code',
+        template_code: 'template_code',
         material_group_desc: 'material_group',
         grup: 'material_group',
         uom: 'base_uom',
@@ -658,16 +6769,35 @@
   }
 
   async function uploadFile() {
+    if (!requireAction('uploadMaterials')) return;
     if (!state.selectedFile || !state.parsedRows.length) return;
     try {
       showLoading(true, 'Mengupload ke Supabase...');
       const r = await callServer('uploadMaterials', state.parsedRows, state.selectedFile.name);
-      toast(`Upload selesai: ${fmt(r.data.inserted)} masuk, ${fmt(r.data.errors)} error`, r.data.errors ? 'warning' : 'success');
+      const resData = r.data || {};
+      const inserted = resData.inserted ?? resData.newInserted ?? 0;
+      const skipped = resData.skipped ?? resData.duplicateSkipped ?? 0;
+      const errors = resData.errors ?? 0;
+
+      let msg = `Hasil Upload: ${fmt(inserted)} data baru ditambahkan.`;
+      if (skipped > 0) {
+        msg += ` (${fmt(skipped)} data duplikat dilewati).`;
+      }
+      if (errors > 0) {
+        msg += ` [${fmt(errors)} baris error].`;
+      }
+
+      toast(msg, errors ? 'warning' : 'success');
       $('materialFile').value = '';
       $('uploadBtn').disabled = true;
+      if ($('cancelUploadBtn')) $('cancelUploadBtn').classList.add('d-none');
+      if ($('preUploadAuditBox')) $('preUploadAuditBox').classList.add('d-none');
       state.parsedRows = [];
       loadUploadHistory();
       loadDashboard();
+      if ($('section-materials').classList.contains('active')) {
+        loadMaterials();
+      }
     } catch (e) {
       toast('Upload gagal: ' + e.message, 'error');
     } finally {
@@ -715,6 +6845,7 @@
 
       $('pageIndicator').textContent = 'Page ' + state.page;
       document.querySelectorAll('.normalize-btn').forEach(b => {
+        b.classList.toggle('d-none', !canAction('normalizeMaterial'));
         b.addEventListener('click', () => normalizeOne(b.dataset.id));
       });
 
@@ -727,6 +6858,7 @@
   }
 
   async function normalizeOne(id) {
+    if (!requireAction('normalizeMaterial')) return;
     try {
       showLoading(true, 'Menormalisasi data...');
       const r = await callServer('normalizeMaterial', id);
@@ -743,6 +6875,7 @@
    * JALANKAN AI CLEANSING & RATIONALIZATION ENGINE
    */
   async function handleRunAiAnalysis() {
+    if (!requireAction('runAICleansingAnalysis')) return;
     try {
       showLoading(true, 'Menjalankan AI Duplicate & Similarity Detection Engine...');
       const r = await callServer('runAICleansingAnalysis', 75, 60);
@@ -780,7 +6913,7 @@
     const filtered = state.duplicates.filter(item => {
       const scoreOk = (Number(item.duplicate_score) || 0) >= minScore;
       const statusOk = (statusFilter === 'ALL') || (item.review_status === statusFilter);
-      const searchOk = !searchQuery || 
+      const searchOk = !searchQuery ||
         (item.candidate_id || '').toLowerCase().includes(searchQuery) ||
         (item.cluster_id || '').toLowerCase().includes(searchQuery) ||
         (item.code_a || '').toLowerCase().includes(searchQuery) ||
@@ -916,6 +7049,7 @@
   }
 
   async function handleSaveDuplicateDecision(decision) {
+    if (!requireAction('saveDuplicateDecision', ['', decision])) return;
     if (!state.activeDuplicate) return;
 
     const item = state.activeDuplicate;
@@ -996,26 +7130,37 @@
     }).join('');
   }
 
-  /**
-   * LAPORAN EFISIENSI & APPROVED DUPLICATES
-   */
-  async function loadApprovedReport() {
-    // 1. Tampilkan informasi user yang sedang login di kop laporan
+  function updateReportUserMeta() {
     const currentUser = state.currentUser || {};
-    const fullName = currentUser.full_name || currentUser.fullName || (currentUser.username === 'admin' ? 'Administrator Sistem' : currentUser.username) || 'Pengunjung (Guest)';
-    const username = currentUser.username || 'guest';
+    const loggedIn = Boolean(currentUser.token);
     const role = currentUser.role || 'GUEST';
+    const isAdm = role === 'ADMIN';
+    const isOp = role === 'OPERATOR';
+    const fullName = loggedIn
+      ? (currentUser.full_name || currentUser.fullName || currentUser.username)
+      : 'Pengunjung (Guest)';
+    const username = loggedIn ? currentUser.username : 'guest';
 
     if ($('reportByUserName')) $('reportByUserName').textContent = fullName;
     if ($('reportByUserAccount')) $('reportByUserAccount').textContent = username;
     if ($('reportByUserRole')) {
       $('reportByUserRole').textContent = `(Role: ${role})`;
+      $('reportByUserRole').className = isAdm ? 'd-block text-accent fw-bold' : isOp ? 'd-block text-primary fw-bold' : 'd-block text-muted';
     }
+    if ($('printSignName')) $('printSignName').textContent = fullName;
+    if ($('printSignRole')) $('printSignRole').textContent = isAdm ? 'Administrator' : `Reviewer (${role})`;
+  }
+
+  /**
+   * LAPORAN EFISIENSI & APPROVED DUPLICATES
+   */
+  async function loadApprovedReport() {
+    // 1. Tampilkan informasi user yang sedang login di kop laporan
+    updateReportUserMeta();
+
     if ($('reportGeneratedDate')) {
       $('reportGeneratedDate').textContent = new Date().toLocaleString('id-ID', { dateStyle: 'full', timeStyle: 'short' });
     }
-    if ($('printSignName')) $('printSignName').textContent = fullName;
-    if ($('printSignRole')) $('printSignRole').textContent = `Reviewer (${role})`;
 
     const filterVal = $('reportStatusFilter')?.value || 'APPROVED_DUPLICATE';
     if ($('reportFilterBadge')) {
@@ -1356,22 +7501,29 @@
   }
 
   function populateRoleForm(roleKey) {
-    if (!state.allRoles || !state.allRoles.length) return;
     const roleObj = state.allRoles.find(r => r.role === roleKey);
-    if (!roleObj) return;
+    const permissions = AccessPolicy.normalize(roleKey, roleObj || {});
+    const fixed = roleKey === 'ADMIN';
+    document.querySelectorAll('.menu-perm-check, #panel-rbac input[type=checkbox]').forEach(el => { el.disabled = fixed; });
+    document.querySelectorAll('#panel-rbac input[type=checkbox]:not(.menu-perm-check)').forEach(el => { el.disabled = fixed || roleKey === 'GUEST'; });
+    if ($('perm_users')) $('perm_users').disabled = true;
+    if (roleKey === 'GUEST') ['perm_upload', 'perm_duplicates', 'perm_settings'].forEach(id => { if ($(id)) $(id).disabled = true; });
+    if ($('savePermissionsBtn')) $('savePermissionsBtn').disabled = fixed;
+    if ($('rolePermissionHint')) $('rolePermissionHint').textContent = fixed ? 'Administrator memiliki akses penuh. Gunakan OPERATOR untuk akses terbatas.' : 'Izin tindakan hanya berlaku jika akses menu terkait diaktifkan. Guest hanya dapat melihat data.';
 
-    const allowedMenus = Array.isArray(roleObj.allowed_menus) ? roleObj.allowed_menus : [];
-    
+    const allowedMenus = permissions.allowed_menus;
+
     // Checkbox menu
     document.querySelectorAll('.menu-perm-check').forEach(chk => {
       chk.checked = allowedMenus.includes(chk.value);
     });
 
     // Switch tindakan khusus
-    if ($('actionPermUpload')) $('actionPermUpload').checked = Boolean(roleObj.can_upload);
-    if ($('actionPermRunAi')) $('actionPermRunAi').checked = Boolean(roleObj.can_run_ai);
-    if ($('actionPermMerge')) $('actionPermMerge').checked = Boolean(roleObj.can_merge);
-    if ($('actionPermSettings')) $('actionPermSettings').checked = Boolean(roleObj.can_manage_settings);
+    if ($('actionPermUpload')) $('actionPermUpload').checked = Boolean(permissions.can_upload);
+    if ($('actionPermRunAi')) $('actionPermRunAi').checked = Boolean(permissions.can_run_ai);
+    if ($('actionPermMerge')) $('actionPermMerge').checked = Boolean(permissions.can_merge);
+    if ($('actionPermSettings')) $('actionPermSettings').checked = Boolean(permissions.can_manage_settings);
+    ['can_review', 'can_run_consistency', 'can_export_consistency'].forEach(key => { if ($(key)) $(key).checked = permissions[key]; });
   }
 
   async function handleSavePermissions() {
@@ -1384,6 +7536,9 @@
     });
 
     const permObj = {
+      can_review: $('can_review')?.checked || false,
+      can_run_consistency: $('can_run_consistency')?.checked || false,
+      can_export_consistency: $('can_export_consistency')?.checked || false,
       can_upload: $('actionPermUpload')?.checked || false,
       can_run_ai: $('actionPermRunAi')?.checked || false,
       can_merge: $('actionPermMerge')?.checked || false,
@@ -1575,6 +7730,272 @@
     } finally {
       showLoading(false);
     }
+  }
+
+  // =============================================================================
+  // MODUL CEK KONSISTENSI & STANDAR KATALOG (TEL SCS, NATO ACodP-1, MESC)
+  // =============================================================================
+
+  function loadConsistencyView() {
+    renderAbbreviationModalTable();
+    renderConsistencyTable();
+  }
+
+  async function runConsistencyAudit() {
+    if (!requireAction('getConsistencyMaterials')) return;
+    if (!window.ConsistencyEngine) {
+      toast('ConsistencyEngine belum dimuat.', 'error');
+      return;
+    }
+
+    try {
+      showLoading(true, 'Mengambil data katalog & menjalankan audit konsistensi...');
+
+      // Fetch every page; the server caps each response at 100 records.
+      state.consistencyData = [];
+      state.consistencySummary = null;
+      renderConsistencyTable();
+      const rawRows = [];
+      let page = 1;
+      while (true) {
+        const r = await callServer('getConsistencyMaterials', page, 100, '');
+        const rows = r.data?.rows || [];
+        rawRows.push(...rows);
+        showLoading(true, `Memeriksa katalog: ${fmt(rawRows.length)} material dimuat...`);
+        if (rows.length < (r.data?.pageSize || 100)) break;
+        page++;
+      }
+
+      if (!rawRows.length) {
+        toast('Tidak ada data material di database untuk diaudit.', 'warning');
+        return;
+      }
+
+      // Format row agar field sesuai standar engine (noun, modifiers, template, etc.)
+      const normalizedRows = rawRows.map(row => {
+        const desc = (row.material_description || row.item_text_result || '').trim();
+        // Coba ekstrak noun dari kata pertama sebelum koma jika belum ada
+        const firstSegment = desc.split(',')[0] || '';
+        return {
+          id: row.id || row.material_code,
+          material_code: row.material_code,
+          item_text_result: desc,
+          template_code: row.template_code || '',
+          major_name: row.noun || row.major_name || firstSegment,
+          modifier1: row.modifier1 || '',
+          modifier2: row.modifier2 || '',
+          modifier3: row.modifier3 || '',
+          manufacture: row.manufacturer || row.manufacture || '',
+          part_no: row.part_number || row.part_no || '',
+          model_no: row.model_no || '',
+          dwg_no: row.dwg_no || '',
+          pos_no: row.pos_no || '',
+          size: row.size || '',
+          material: row.material || '',
+          class: row.class || ''
+        };
+      });
+
+      const auditResult = window.ConsistencyEngine.auditCatalogDataset(normalizedRows);
+      state.consistencySummary = auditResult.summary;
+      state.consistencyData = auditResult.results;
+
+      // Update KPI Cards
+      if ($('kpiConsistencyScore')) $('kpiConsistencyScore').textContent = `${auditResult.summary.avg_score}%`;
+      if ($('kpiCompliantCount')) $('kpiCompliantCount').textContent = fmt(auditResult.summary.compliant_count);
+      if ($('kpiWarningCount')) $('kpiWarningCount').textContent = fmt(auditResult.summary.warning_count);
+      if ($('kpiNonCompliantCount')) $('kpiNonCompliantCount').textContent = fmt(auditResult.summary.non_compliant_count);
+      if ($('kpiTypoCount')) $('kpiTypoCount').textContent = fmt(auditResult.summary.typo_count);
+
+      renderConsistencyTable();
+      toast(`Audit konsistensi selesai. Tingkat kepatuhan: ${auditResult.summary.compliance_rate}%`, 'success');
+    } catch (e) {
+      toast('Gagal menjalankan audit: ' + e.message, 'error');
+    } finally {
+      showLoading(false);
+    }
+  }
+
+  function renderConsistencyTable() {
+    const tbody = $('consistencyTableBody');
+    if (!tbody) return;
+
+    const statusFilter = $('consistencyStatusFilter')?.value || 'ALL';
+    const tempFilter = $('consistencyTemplateFilter')?.value || 'ALL';
+    const search = ($('consistencySearchInput')?.value || '').trim().toLowerCase();
+
+    let list = state.consistencyData || [];
+
+    if (statusFilter !== 'ALL') {
+      list = list.filter(x => x.status === statusFilter);
+    }
+    if (tempFilter !== 'ALL') {
+      list = list.filter(x => (x.template_code || '').startsWith(tempFilter));
+    }
+    if (search) {
+      list = list.filter(x => {
+        const text = (x.item_text || '').toLowerCase();
+        const code = String(x.material_id || '').toLowerCase();
+        const temp = (x.template_code || '').toLowerCase();
+        return text.includes(search) || code.includes(search) || temp.includes(search);
+      });
+    }
+
+    if ($('consistencyRowCountText')) {
+      $('consistencyRowCountText').textContent = `${list.length} data item ditampilkan (dari total ${state.consistencyData.length})`;
+    }
+
+    if (!list.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted p-4">Tidak ada data material yang sesuai filter.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = list.map((item, idx) => {
+      const statusBadge = item.status === 'COMPLIANT' ? 'bg-success' :
+                          item.status === 'WARNING' ? 'bg-warning text-dark' : 'bg-danger';
+
+      const scoreClass = item.score >= 90 ? 'score-high' : item.score >= 60 ? 'score-mid' : 'score-low';
+
+      // Format issues list
+      const issuesHtml = item.issues.length ? item.issues.map(iss => {
+        const icon = iss.severity === 'critical' ? 'bi-x-circle-fill text-danger' :
+                     iss.severity === 'warning' ? 'bi-exclamation-triangle-fill text-warning' : 'bi-info-circle-fill text-info';
+        return `
+          <div class="mb-1 small">
+            <i class="bi ${icon} me-1"></i>
+            <span class="fw-semibold">${escapeHtml(iss.type)}:</span> ${escapeHtml(iss.message)}
+          </div>
+        `;
+      }).join('') : '<span class="text-success small"><i class="bi bi-check-circle-fill me-1"></i>Format & atribut konsisten sesuai standar.</span>';
+
+      return `
+        <tr>
+          <td>${idx + 1}</td>
+          <td>
+            <span class="badge bg-secondary">${escapeHtml(item.template_code || 'GEN')}</span>
+          </td>
+          <td>
+            <strong>${escapeHtml(item.material_id)}</strong>
+            <div class="small text-muted mt-1 font-monospace" style="word-break: break-all;">${escapeHtml(item.item_text)}</div>
+          </td>
+          <td>
+            <span class="badge-score ${scoreClass}">${item.score}%</span>
+          </td>
+          <td>
+            <span class="badge ${statusBadge}">${item.status}</span>
+          </td>
+          <td>
+            <div style="max-height: 120px; overflow-y: auto;">
+              ${issuesHtml}
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  function renderAbbreviationModalTable() {
+    const tbody = $('abvMasterTableBody');
+    if (!tbody) return;
+
+    const search = ($('abvSearchInput')?.value || '').trim().toLowerCase();
+    const allAbv = window.CATALOG_RULES?.ABBREVIATIONS || [];
+
+    const filtered = allAbv.filter(x => {
+      if (!search) return true;
+      return (x.abv || '').toLowerCase().includes(search) || (x.full || '').toLowerCase().includes(search);
+    });
+
+    if ($('abvCountLabel')) $('abvCountLabel').textContent = fmt(filtered.length);
+
+    if (!filtered.length) {
+      tbody.innerHTML = '<tr><td colspan="2" class="text-center text-muted p-3">Singkatan tidak ditemukan.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = filtered.slice(0, 300).map(x => `
+      <tr>
+        <td><strong><code>${escapeHtml(x.abv)}</code></strong></td>
+        <td>${escapeHtml(x.full)}</td>
+      </tr>
+    `).join('');
+  }
+
+  async function exportConsistencyExcel() {
+    if (!requireAction('authorizeConsistencyExport')) return;
+    try { await callServer('authorizeConsistencyExport'); } catch (error) { toast(error.message, 'error'); return; }
+    if (!state.consistencyData || !state.consistencyData.length) {
+      toast('Jalankan audit terlebih dahulu sebelum mengunduh hasil.', 'warning');
+      return;
+    }
+
+    if (typeof XLSX === 'undefined') {
+      toast('Pustaka XLSX tidak tersedia.', 'error');
+      return;
+    }
+
+    const wsData = [
+      ['LAPORAN AUDIT KONSISTENSI & STANDARISASI KATALOG MATERIAL (TEL SCS / NATO / MESC)'],
+      ['Sistem AI Material Master Cleansing, Duplicate Review & Consistency Validator'],
+      [],
+      ['Tanggal Audit:', new Date().toLocaleString('id-ID')],
+      ['Total Item Diaudit:', state.consistencySummary?.total_items || state.consistencyData.length],
+      ['Skor Rata-Rata Kepatuhan:', `${state.consistencySummary?.avg_score || 0}%`],
+      ['Total Compliant:', state.consistencySummary?.compliant_count || 0],
+      ['Total Warning:', state.consistencySummary?.warning_count || 0],
+      ['Total Non-Compliant:', state.consistencySummary?.non_compliant_count || 0],
+      ['Total Typo Terdeteksi:', state.consistencySummary?.typo_count || 0],
+      [],
+      [
+        'No',
+        'Material ID / Code',
+        'Template Code',
+        'Deskripsi Material (item text result)',
+        'Skor Kepatuhan (%)',
+        'Status Standar',
+        'Jumlah Pelanggaran',
+        'Detail Temuan / Masalah',
+        'Rekomendasi Perbaikan Standar'
+      ]
+    ];
+
+    state.consistencyData.forEach((item, idx) => {
+      const issueDetails = item.issues.map(i => `[${i.type}] ${i.message}`).join(' | ');
+      const suggestionDetails = item.suggestions.map(s => `${s.field}: -> ${s.suggested}`).join(' | ');
+
+      wsData.push([
+        idx + 1,
+        item.material_id || '',
+        item.template_code || '',
+        item.item_text || '',
+        item.score || 0,
+        item.status || '',
+        item.issues.length,
+        issueDetails || 'Tidak ada masalah',
+        suggestionDetails || 'Sesuai standar'
+      ]);
+    });
+
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    ws['!cols'] = [
+      { wch: 6 },
+      { wch: 18 },
+      { wch: 14 },
+      { wch: 50 },
+      { wch: 18 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 55 },
+      { wch: 45 }
+    ];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Audit_Konsistensi');
+
+    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const fileName = `Audit_Konsistensi_Katalog_Material_${dateStr}.xlsx`;
+    XLSX.writeFile(wb, fileName);
+    toast(`Laporan Excel berhasil diunduh: ${fileName}`, 'success');
   }
 
   function debounce(fn, wait) {

@@ -40,7 +40,7 @@
       <div class="small text-muted mb-1" id="sidebarRoleLabel"><i class="bi bi-person me-1"></i>Mode Pengunjung</div>
       <button id="sidebarLogoutBtn" type="button" class="sidebar-logout-btn d-none">
         <i class="bi bi-box-arrow-right"></i>
-        <span>Logout Admin</span>
+        <span>Logout</span>
       </button>
     </div>
   </aside>
@@ -61,9 +61,9 @@
           <span id="currentUser">Pengunjung (Guest)</span>
         </div>
         <button id="openLoginModalBtn" type="button" class="btn btn-sm btn-accent">
-          <i class="bi bi-shield-lock-fill me-1"></i>Login Admin
+          <i class="bi bi-shield-lock-fill me-1"></i>Login
         </button>
-        <button id="logoutBtn" type="button" class="icon-btn btn-logout d-none" title="Logout Admin" aria-label="Logout">
+        <button id="logoutBtn" type="button" class="icon-btn btn-logout d-none" title="Logout" aria-label="Logout">
           <i class="bi bi-box-arrow-right"></i>
         </button>
       </div>
@@ -667,11 +667,16 @@
           </div>
         </div>
 
+        <p id="rolePermissionHint" class="small text-muted" role="status"></p>
         <div class="row g-4">
           <!-- Modul Menu -->
           <div class="col-md-7 border-end">
             <h4 class="small fw-bold text-accent mb-3"><i class="bi bi-layout-sidebar-inset me-1"></i>Menu / Modul yang Boleh Dilihat:</h4>
             <div class="list-group list-group-flush" id="menuPermissionsList">
+              <label class="list-group-item d-flex justify-content-between align-items-center bg-transparent border-0 py-2">
+                <div><strong class="d-block small">Laporan Efisiensi</strong><small class="text-muted">Melihat dan mengunduh laporan hasil review.</small></div>
+                <input class="form-check-input menu-perm-check" type="checkbox" value="reports" id="perm_reports">
+              </label>
               <label class="list-group-item d-flex justify-content-between align-items-center bg-transparent border-0 py-2">
                 <div>
                   <strong class="d-block small">Executive Dashboard</strong>
@@ -742,7 +747,10 @@
           <div class="col-md-5">
             <h4 class="small fw-bold text-accent mb-3"><i class="bi bi-toggles me-1"></i>Izin Tindakan Khusus:</h4>
             
-            <div class="form-check form-switch mb-3">
+            <div class="form-check form-switch mb-3"><input class="form-check-input" type="checkbox" id="can_review"><label class="form-check-label" for="can_review">Konfirmasi / tolak duplikat</label></div>
+<div class="form-check form-switch mb-3"><input class="form-check-input" type="checkbox" id="can_run_consistency"><label class="form-check-label" for="can_run_consistency">Jalankan audit konsistensi</label></div>
+<div class="form-check form-switch mb-3"><input class="form-check-input" type="checkbox" id="can_export_consistency"><label class="form-check-label" for="can_export_consistency">Ekspor hasil konsistensi</label></div>
+<div class="form-check form-switch mb-3">
               <input class="form-check-input" type="checkbox" id="actionPermUpload">
               <label class="form-check-label small" for="actionPermUpload">
                 <strong>Boleh Upload Data Baru</strong>
@@ -1057,27 +1065,26 @@
     <div class="modal-dialog modal-dialog-centered">
       <div class="modal-content panel p-0 border-0">
         <div class="modal-header border-bottom p-3">
-          <h5 class="modal-title h6 mb-0" id="adminLoginModalLabel"><i class="bi bi-shield-lock-fill text-accent me-2"></i>Login Administrator</h5>
+          <h5 class="modal-title h6 mb-0" id="adminLoginModalLabel"><i class="bi bi-shield-lock-fill text-accent me-2"></i>Login Pengguna</h5>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
         </div>
         <form id="adminLoginForm" onsubmit="return false;">
           <div class="modal-body p-4">
             <div class="text-center mb-3">
               <span class="brand-icon mx-auto mb-2" style="width:48px; height:48px; font-size:24px;"><i class="bi bi-person-badge"></i></span>
-              <h6 class="mb-1">Masuk dengan Akun Admin</h6>
-              <p class="text-muted small mb-0">Mode pengunjung (guest) tetap dapat menggunakan menu umum tanpa harus login.</p>
+              <h6 class="mb-1">Masuk dengan Akun Pengguna</h6>
+              <p class="text-muted small mb-0">Masuk sebagai Operator atau Administrator untuk hak akses sesuai peran.</p>
             </div>
             <div id="loginConfigWarning" class="alert alert-warning small p-2 mb-3 d-none">
               <i class="bi bi-exclamation-triangle-fill me-1"></i>Database Supabase belum terhubung. Buka menu <a href="javascript:void(0)" onclick="bootstrap.Modal.getInstance(document.getElementById('adminLoginModal')).hide(); window.navigateToSection('settings');" class="alert-link fw-bold">Pengaturan</a> untuk memasukkan Supabase Key.
             </div>
             <div class="form-group mb-3">
               <label for="loginUsername">Username</label>
-              <input id="loginUsername" type="text" class="form-control-custom" placeholder="admin" required autofocus>
+              <input id="loginUsername" type="text" class="form-control-custom" placeholder="Username (admin / operator)" required autofocus>
             </div>
             <div class="form-group mb-3">
               <label for="loginPassword">Password</label>
-              <input id="loginPassword" type="password" class="form-control-custom" placeholder="Masukkan password admin" required>
-              <small class="text-muted">Default admin: <code>admin</code> / <code>admin123</code></small>
+              <input id="loginPassword" type="password" class="form-control-custom" placeholder="Masukkan password" required>
             </div>
           </div>
           <div class="modal-footer border-top p-3 d-flex justify-content-end gap-2">
@@ -1202,6 +1209,7 @@
 <script src="js/config.js"></script>
 <script src="js/catalog-rules.js"></script>
 <script src="js/consistency-engine.js"></script>
+<script src="js/access-policy.js"></script>
 <script src="js/api.js"></script>
 <script src="js/app.js"></script>
 </body>

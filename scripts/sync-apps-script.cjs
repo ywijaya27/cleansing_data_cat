@@ -1,0 +1,13 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const root = path.resolve(__dirname, '..');
+const read = name => fs.readFileSync(path.join(root, name), 'utf8');
+const write = (name, content) => fs.writeFileSync(path.join(root, name), content.replace(/[ \t]+$/gm, ''));
+const files = ['config', 'access-policy', 'api', 'catalog-rules', 'consistency-engine', 'app'];
+let html = read('index.html').replace('<link rel="stylesheet" href="css/style.css">', "<?!= include('Stylesheet'); ?>");
+html = html.replace(/<script src="js\/[^"]+"><\/script>\s*/g, '');
+html = html.replace('</body>', "<?!= include('JavaScript'); ?>\n</body>");
+write('apps-script/Index.html', html);
+write('apps-script/Stylesheet.html', '<style>\n' + read('css/style.css') + '\n</style>\n');
+write('apps-script/JavaScript.html', '<script>\n' + files.map(file => read('js/' + file + '.js')).join('\n;\n') + '\n</script>\n');
+write('apps-script/AccessPolicy.gs', read('js/access-policy.js'));

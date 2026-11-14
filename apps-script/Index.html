@@ -27,6 +27,7 @@
       <button type="button" class="nav-item" data-section="materials"><i class="bi bi-boxes"></i><span>Material Master</span></button>
       <button type="button" class="nav-item" data-section="duplicates" id="nav-duplicates"><i class="bi bi-intersect"></i><span>Duplicate Review</span></button>
       <button type="button" class="nav-item" data-section="similarity" id="nav-similarity"><i class="bi bi-diagram-3"></i><span>Similarity</span></button>
+      <button type="button" class="nav-item" data-section="consistency" id="nav-consistency"><i class="bi bi-check2-circle"></i><span>Cek Konsistensi</span></button>
       <button type="button" class="nav-item" data-section="reports" id="nav-reports"><i class="bi bi-file-earmark-bar-graph"></i><span>Laporan Efisiensi</span></button>
       <button type="button" class="nav-item" data-section="users" id="nav-users"><i class="bi bi-people"></i><span>User &amp; Hak Akses</span></button>
       <button type="button" class="nav-item" data-section="settings" id="nav-settings"><i class="bi bi-gear"></i><span>Pengaturan</span></button>
@@ -39,7 +40,7 @@
       <div class="small text-muted mb-1" id="sidebarRoleLabel"><i class="bi bi-person me-1"></i>Mode Pengunjung</div>
       <button id="sidebarLogoutBtn" type="button" class="sidebar-logout-btn d-none">
         <i class="bi bi-box-arrow-right"></i>
-        <span>Logout Admin</span>
+        <span>Logout</span>
       </button>
     </div>
   </aside>
@@ -60,9 +61,9 @@
           <span id="currentUser">Pengunjung (Guest)</span>
         </div>
         <button id="openLoginModalBtn" type="button" class="btn btn-sm btn-accent">
-          <i class="bi bi-shield-lock-fill me-1"></i>Login Admin
+          <i class="bi bi-shield-lock-fill me-1"></i>Login
         </button>
-        <button id="logoutBtn" type="button" class="icon-btn btn-logout d-none" title="Logout Admin" aria-label="Logout">
+        <button id="logoutBtn" type="button" class="icon-btn btn-logout d-none" title="Logout" aria-label="Logout">
           <i class="bi bi-box-arrow-right"></i>
         </button>
       </div>
@@ -118,7 +119,81 @@
           <input id="materialFile" type="file" accept=".csv,.xlsx,.xls" hidden>
         </label>
         <div id="fileInfo" class="file-info d-none"></div>
-        <button id="uploadBtn" type="button" class="btn btn-accent" disabled><i class="bi bi-cloud-arrow-up"></i> Validasi & Upload</button>
+
+        <!-- PRE-UPLOAD GATEKEEPER CONSISTENCY AUDIT PANEL -->
+        <div id="preUploadAuditBox" class="mt-4 p-3 border rounded bg-body-tertiary d-none">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <div>
+              <h3 class="h6 mb-1 text-accent"><i class="bi bi-shield-check me-2"></i>Hasil Pra-Audit Konsistensi Katalog (SCS Gatekeeper)</h3>
+              <p class="text-muted small mb-0">Memverifikasi kelayakan data sebelum disimpan ke database aktif.</p>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+              <span class="badge" id="preUploadGatekeeperBadge">Menganalisis...</span>
+            </div>
+          </div>
+
+          <div class="kpi-grid mb-3">
+            <article class="kpi-card p-2">
+              <span class="kpi-icon teal"><i class="bi bi-speedometer2"></i></span>
+              <div>
+                <small>Skor Rata-Rata</small>
+                <strong id="preUploadScore" class="fs-5">0%</strong>
+              </div>
+            </article>
+            <article class="kpi-card p-2">
+              <span class="kpi-icon green"><i class="bi bi-patch-check"></i></span>
+              <div>
+                <small>Compliant</small>
+                <strong id="preUploadCompliant" class="fs-5">0</strong>
+              </div>
+            </article>
+            <article class="kpi-card p-2">
+              <span class="kpi-icon amber"><i class="bi bi-exclamation-triangle"></i></span>
+              <div>
+                <small>Warning</small>
+                <strong id="preUploadWarning" class="fs-5">0</strong>
+              </div>
+            </article>
+            <article class="kpi-card p-2">
+              <span class="kpi-icon red"><i class="bi bi-x-octagon"></i></span>
+              <div>
+                <small>Kritis (Non-Compliant)</small>
+                <strong id="preUploadCritical" class="fs-5">0</strong>
+              </div>
+            </article>
+          </div>
+
+          <div id="preUploadWarningAlert" class="alert alert-warning py-2 px-3 small d-none mb-3">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i>
+            <span id="preUploadWarningText">Ditemukan data yang melanggar standar template atau ejaan. Anda tetap dapat melanjutkan atau memperbaiki file terlebih dahulu.</span>
+          </div>
+
+          <!-- TABEL PREVIEW DATA SAMPLE -->
+          <div class="table-responsive" style="max-height: 250px;">
+            <table class="data-table small mb-0">
+              <thead>
+                <tr>
+                  <th style="width: 35px;">No</th>
+                  <th>Kode / Part No</th>
+                  <th>Deskripsi &amp; Atribut</th>
+                  <th style="width: 80px;">Skor</th>
+                  <th style="width: 110px;">Status</th>
+                  <th>Catatan Audit</th>
+                </tr>
+              </thead>
+              <tbody id="preUploadPreviewBody">
+                <!-- Diisi JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="d-flex justify-content-end gap-2 mt-3">
+          <button id="cancelUploadBtn" type="button" class="btn btn-sm btn-outline-secondary d-none">
+            <i class="bi bi-x-circle me-1"></i>Batalkan Berkas
+          </button>
+          <button id="uploadBtn" type="button" class="btn btn-accent" disabled><i class="bi bi-cloud-arrow-up"></i> Validasi & Upload ke Database</button>
+        </div>
       </article>
       <article class="panel mt-4">
         <div class="panel-head"><h2>Upload History</h2></div>
@@ -430,6 +505,127 @@
       </article>
     </section>
 
+    <!-- CONSISTENCY & CATALOG COMPLIANCE (TEL SCS & NATO ALIGNED) -->
+    <section id="section-consistency" class="content-section">
+      <div class="section-head">
+        <div>
+          <h2>Audit &amp; Cek Konsistensi Katalog Material</h2>
+          <p>Validasi aturan template (TEL SCS / NATO ACodP-1 / MESC), kepatuhan singkatan baku, ejaan/typo, dan format penulisan.</p>
+        </div>
+        <div class="d-flex gap-2">
+          <button id="runConsistencyAuditBtn" type="button" class="btn btn-sm btn-accent">
+            <i class="bi bi-play-circle me-1"></i>Jalankan Audit Katalog
+          </button>
+          <button id="exportConsistencyBtn" type="button" class="btn btn-sm btn-outline-accent">
+            <i class="bi bi-file-earmark-spreadsheet me-1"></i>Export Hasil Audit
+          </button>
+        </div>
+      </div>
+
+      <!-- KPI KONSISTENSI -->
+      <div class="kpi-grid">
+        <article class="kpi-card">
+          <span class="kpi-icon teal"><i class="bi bi-speedometer2"></i></span>
+          <div>
+            <small>Skor Rata-Rata</small>
+            <strong id="kpiConsistencyScore">0%</strong>
+          </div>
+        </article>
+        <article class="kpi-card">
+          <span class="kpi-icon green"><i class="bi bi-patch-check"></i></span>
+          <div>
+            <small>Compliant (Lolos)</small>
+            <strong id="kpiCompliantCount">0</strong>
+          </div>
+        </article>
+        <article class="kpi-card">
+          <span class="kpi-icon amber"><i class="bi bi-exclamation-triangle"></i></span>
+          <div>
+            <small>Peringatan (Warning)</small>
+            <strong id="kpiWarningCount">0</strong>
+          </div>
+        </article>
+        <article class="kpi-card">
+          <span class="kpi-icon red"><i class="bi bi-x-octagon"></i></span>
+          <div>
+            <small>Non-Compliant (Kritis)</small>
+            <strong id="kpiNonCompliantCount">0</strong>
+          </div>
+        </article>
+        <article class="kpi-card">
+          <span class="kpi-icon blue"><i class="bi bi-spellcheck"></i></span>
+          <div>
+            <small>Typo Terdeteksi</small>
+            <strong id="kpiTypoCount">0</strong>
+          </div>
+        </article>
+      </div>
+
+      <!-- TAB FILTER & PENCARIAN -->
+      <article class="panel mt-4 mb-4">
+        <div class="row g-3 align-items-center">
+          <div class="col-md-4">
+            <div class="search-box">
+              <i class="bi bi-search"></i>
+              <input id="consistencySearchInput" type="search" placeholder="Cari material, part no, atau deskripsi..." class="form-control-custom">
+            </div>
+          </div>
+          <div class="col-md-3">
+            <select id="consistencyStatusFilter" class="form-control-custom">
+              <option value="ALL">Semua Status Kepatuhan</option>
+              <option value="NON_COMPLIANT">Hanya Non-Compliant (Kritis &lt; 60%)</option>
+              <option value="WARNING">Hanya Peringatan (60% - 89%)</option>
+              <option value="COMPLIANT">Hanya Compliant (&gt;= 90%)</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <select id="consistencyTemplateFilter" class="form-control-custom">
+              <option value="ALL">Semua Template (GEN, UNT, OEM, STR, dll.)</option>
+              <option value="GEN">GEN (General Item)</option>
+              <option value="UNT">UNT (Unit Item)</option>
+              <option value="OEM">OEM (Original Equipment Mfr)</option>
+              <option value="STR">STR (Construction Item)</option>
+              <option value="SPC">SPC (Specific Item)</option>
+              <option value="MFG">MFG (Manufacturing Item)</option>
+              <option value="SVC">SVC (Service Item)</option>
+            </select>
+          </div>
+          <div class="col-md-2 text-end">
+            <button id="viewAbvModalBtn" type="button" class="btn btn-sm btn-outline-secondary w-100" data-bs-toggle="modal" data-bs-target="#abbreviationModal">
+              <i class="bi bi-book me-1"></i>Kamus Singkatan
+            </button>
+          </div>
+        </div>
+      </article>
+
+      <!-- TABEL HASIL AUDIT KONSISTENSI -->
+      <article class="panel">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h3 class="h6 mb-0"><i class="bi bi-list-check me-2 text-accent"></i>Rincian Evaluasi Kepatuhan Standar Per Item</h3>
+          <span class="text-muted small" id="consistencyRowCountText">0 data item dievaluasi</span>
+        </div>
+        <div class="table-responsive">
+          <table class="data-table" id="consistencyTable">
+            <thead>
+              <tr>
+                <th style="width: 40px;">No</th>
+                <th style="width: 100px;">Template</th>
+                <th>Deskripsi Material Master</th>
+                <th style="width: 120px;">Skor Standar</th>
+                <th style="width: 130px;">Status</th>
+                <th>Temuan Ketidakkonsistenan &amp; Saran Standar</th>
+              </tr>
+            </thead>
+            <tbody id="consistencyTableBody">
+              <tr>
+                <td colspan="6" class="text-center text-muted p-4">Klik tombol <strong>"Jalankan Audit Katalog"</strong> untuk memulai evaluasi data material.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
     <!-- USER MANAGEMENT & HAK AKSES (RBAC) -->
     <section id="section-users" class="content-section">
       <div class="section-head">
@@ -471,11 +667,16 @@
           </div>
         </div>
 
+        <p id="rolePermissionHint" class="small text-muted" role="status"></p>
         <div class="row g-4">
           <!-- Modul Menu -->
           <div class="col-md-7 border-end">
             <h4 class="small fw-bold text-accent mb-3"><i class="bi bi-layout-sidebar-inset me-1"></i>Menu / Modul yang Boleh Dilihat:</h4>
             <div class="list-group list-group-flush" id="menuPermissionsList">
+              <label class="list-group-item d-flex justify-content-between align-items-center bg-transparent border-0 py-2">
+                <div><strong class="d-block small">Laporan Efisiensi</strong><small class="text-muted">Melihat dan mengunduh laporan hasil review.</small></div>
+                <input class="form-check-input menu-perm-check" type="checkbox" value="reports" id="perm_reports">
+              </label>
               <label class="list-group-item d-flex justify-content-between align-items-center bg-transparent border-0 py-2">
                 <div>
                   <strong class="d-block small">Executive Dashboard</strong>
@@ -498,6 +699,14 @@
                   <small class="text-muted">Melihat alternatif merk (brand cross-reference) dan substitusi.</small>
                 </div>
                 <input class="form-check-input menu-perm-check" type="checkbox" value="similarity" id="perm_similarity">
+              </label>
+
+              <label class="list-group-item d-flex justify-content-between align-items-center bg-transparent border-0 py-2">
+                <div>
+                  <strong class="d-block small">Cek Konsistensi &amp; Standar Katalog</strong>
+                  <small class="text-muted">Audit kepatuhan template SCS, singkatan baku, ejaan, dan delimiter.</small>
+                </div>
+                <input class="form-check-input menu-perm-check" type="checkbox" value="consistency" id="perm_consistency">
               </label>
 
               <label class="list-group-item d-flex justify-content-between align-items-center bg-transparent border-0 py-2">
@@ -537,8 +746,11 @@
           <!-- Hak Aksi Khusus -->
           <div class="col-md-5">
             <h4 class="small fw-bold text-accent mb-3"><i class="bi bi-toggles me-1"></i>Izin Tindakan Khusus:</h4>
-            
-            <div class="form-check form-switch mb-3">
+
+            <div class="form-check form-switch mb-3"><input class="form-check-input" type="checkbox" id="can_review"><label class="form-check-label" for="can_review">Konfirmasi / tolak duplikat</label></div>
+<div class="form-check form-switch mb-3"><input class="form-check-input" type="checkbox" id="can_run_consistency"><label class="form-check-label" for="can_run_consistency">Jalankan audit konsistensi</label></div>
+<div class="form-check form-switch mb-3"><input class="form-check-input" type="checkbox" id="can_export_consistency"><label class="form-check-label" for="can_export_consistency">Ekspor hasil konsistensi</label></div>
+<div class="form-check form-switch mb-3">
               <input class="form-check-input" type="checkbox" id="actionPermUpload">
               <label class="form-check-label small" for="actionPermUpload">
                 <strong>Boleh Upload Data Baru</strong>
@@ -771,7 +983,7 @@
               <i class="bi bi-stars text-accent fs-5"></i>
               <strong class="text-accent">AI Explainability &amp; Faktor Kesamaan</strong>
             </div>
-            
+
             <p id="detailAiExplanation" class="small mb-3 text-muted">Memuat penjelasan...</p>
 
             <div class="row g-2 text-center small">
@@ -853,27 +1065,26 @@
     <div class="modal-dialog modal-dialog-centered">
       <div class="modal-content panel p-0 border-0">
         <div class="modal-header border-bottom p-3">
-          <h5 class="modal-title h6 mb-0" id="adminLoginModalLabel"><i class="bi bi-shield-lock-fill text-accent me-2"></i>Login Administrator</h5>
+          <h5 class="modal-title h6 mb-0" id="adminLoginModalLabel"><i class="bi bi-shield-lock-fill text-accent me-2"></i>Login Pengguna</h5>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
         </div>
         <form id="adminLoginForm" onsubmit="return false;">
           <div class="modal-body p-4">
             <div class="text-center mb-3">
               <span class="brand-icon mx-auto mb-2" style="width:48px; height:48px; font-size:24px;"><i class="bi bi-person-badge"></i></span>
-              <h6 class="mb-1">Masuk dengan Akun Admin</h6>
-              <p class="text-muted small mb-0">Mode pengunjung (guest) tetap dapat menggunakan menu umum tanpa harus login.</p>
+              <h6 class="mb-1">Masuk dengan Akun Pengguna</h6>
+              <p class="text-muted small mb-0">Masuk sebagai Operator atau Administrator untuk hak akses sesuai peran.</p>
             </div>
             <div id="loginConfigWarning" class="alert alert-warning small p-2 mb-3 d-none">
               <i class="bi bi-exclamation-triangle-fill me-1"></i>Database Supabase belum terhubung. Buka menu <a href="javascript:void(0)" onclick="bootstrap.Modal.getInstance(document.getElementById('adminLoginModal')).hide(); window.navigateToSection('settings');" class="alert-link fw-bold">Pengaturan</a> untuk memasukkan Supabase Key.
             </div>
             <div class="form-group mb-3">
               <label for="loginUsername">Username</label>
-              <input id="loginUsername" type="text" class="form-control-custom" placeholder="admin" required autofocus>
+              <input id="loginUsername" type="text" class="form-control-custom" placeholder="Username (admin / operator)" required autofocus>
             </div>
             <div class="form-group mb-3">
               <label for="loginPassword">Password</label>
-              <input id="loginPassword" type="password" class="form-control-custom" placeholder="Masukkan password admin" required>
-              <small class="text-muted">Default admin: <code>admin</code> / <code>admin123</code></small>
+              <input id="loginPassword" type="password" class="form-control-custom" placeholder="Masukkan password" required>
             </div>
           </div>
           <div class="modal-footer border-top p-3 d-flex justify-content-end gap-2">
@@ -954,6 +1165,41 @@
     </div>
   </div>
 
+  <!-- MODAL KAMUS SINGKATAN -->
+  <div class="modal fade" id="abbreviationModal" tabindex="-1" aria-labelledby="abbreviationModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+      <div class="modal-content panel p-0 border-0">
+        <div class="modal-header border-bottom p-3">
+          <h5 class="modal-title h6 mb-0" id="abbreviationModalLabel"><i class="bi bi-book text-accent me-2"></i>Kamus Singkatan Resmi (TEL SCS &amp; NATO / MESC)</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
+        </div>
+        <div class="modal-body p-4">
+          <div class="search-box mb-3">
+            <i class="bi bi-search"></i>
+            <input id="abvSearchInput" type="search" placeholder="Cari singkatan (misal: DIA, MATL, CONN, BRG)..." class="form-control-custom">
+          </div>
+          <div class="table-responsive" style="max-height: 400px;">
+            <table class="data-table" id="abvMasterTable">
+              <thead>
+                <tr>
+                  <th style="width: 150px;">Singkatan Resmi</th>
+                  <th>Arti / Istilah Lengkap</th>
+                </tr>
+              </thead>
+              <tbody id="abvMasterTableBody">
+                <!-- Diisi dinamis oleh JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="modal-footer border-top p-3 d-flex justify-content-between align-items-center">
+          <small class="text-muted"><span id="abvCountLabel">0</span> istilah singkatan terdaftar</small>
+          <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Tutup</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="toast" class="app-toast" role="status" aria-live="polite"></div>
 </div>
 
@@ -963,5 +1209,4 @@
 <?!= include('JavaScript'); ?>
 </body>
 </html>
-
 

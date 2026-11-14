@@ -15,6 +15,8 @@ const multer = require('multer');
 const XLSX = require('xlsx');
 require('dotenv').config();
 
+const AccessPolicy = require('../js/access-policy');
+const sessions = new Map();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
@@ -110,6 +112,63 @@ function cleanPartNumber(v) {
 // =============================================================================
 // ROUTES: STATUS & KONEKSI
 // =============================================================================
+
+// Every API request is authorized before its route handler.
+app.use('/api', async (req, res, next) => {
+  try {
+    const routes = {
+      'GET /status': 'getAppStatus', 'POST /auth/login': 'loginUser',
+      'GET /auth/access-control': 'getSystemAccessControl', 'GET /auth/session': 'getSession',
+      'POST /auth/logout': 'logoutUser', 'GET /materials/dashboard-summary': 'getDashboardData',
+      'GET /materials': 'getMaterials', 'GET /consistency/materials': 'getConsistencyMaterials',
+      'POST /consistency/export-authorization': 'authorizeConsistencyExport',
+      'POST /upload': 'uploadMaterials', 'GET /upload/history': 'getUploadHistory',
+      'POST /duplicates/run-ai': 'runAICleansingAnalysis', 'GET /duplicates': 'getDuplicateCandidates',
+      'POST /duplicates/decision': 'saveDuplicateDecision', 'GET /similarity': 'getSimilarMaterials',
+      'GET /reports/approved-duplicates': 'getApprovedDuplicatesReport',
+      'POST /settings/supabase': 'setupSupabaseConfig', 'POST /settings/test-connection': 'testSupabaseConnection',
+      'GET /users': 'getUserManagementData', 'POST /users': 'saveAppUser', 'POST /users/permissions': 'saveRolePermissions'
+    };
+    const action = req.method === 'DELETE' && /^\/users\/[^/]+$/.test(req.path)
+      ? 'deleteAppUser' : routes[req.method + ' ' + req.path];
+    if (!action) return apiResponse(res, 404, false, null, 'Endpoint tidak dikenal.');
+    const token = (req.headers.authorization || '').replace(/^Bearer /, '');
+    if (action === 'logoutUser') { sessions.delete(token); return apiResponse(res, 200, true, null, 'Sesi diakhiri.'); }
+    let actor = { role: 'GUEST', username: 'guest', permissions: {} };
+    if (token && action !== 'loginUser') {
+      const session = sessions.get(token);
+      if (!session || session.expiresAt <= Date.now()) {
+        sessions.delete(token);
+        return apiResponse(res, 401, false, null, 'Sesi berakhir. Silakan login kembali.');
+      }
+      const users = await supabaseFetch(`app_users?id=eq.${encodeURIComponent(session.id)}&is_active=eq.true&select=id,username,full_name,role&limit=1`);
+      if (!users?.length) return apiResponse(res, 401, false, null, 'Akun tidak aktif.');
+      actor = { ...users[0], token };
+    }
+    const roles = await supabaseFetch(`app_role_permissions?role=eq.${encodeURIComponent(actor.role)}&limit=1`);
+    actor.permissions = AccessPolicy.normalize(actor.role, roles?.[0] || {});
+    if (!AccessPolicy.allows(actor.role, actor.permissions, action, ['', req.body?.decision])) {
+      return apiResponse(res, 403, false, null, 'Akses ditolak. Anda tidak memiliki izin untuk tindakan ini.');
+    }
+    req.actor = actor;
+    if (action === 'getSession') return apiResponse(res, 200, true, actor, 'Sesi diverifikasi.');
+    if (action === 'authorizeConsistencyExport') return apiResponse(res, 200, true);
+    return next();
+  } catch (error) {
+    // Status and login must remain usable while diagnosing initial setup.
+    if (['/status', '/auth/login'].includes(req.path)) return next();
+    return apiResponse(res, 503, false, null, 'Tidak dapat memverifikasi hak akses.');
+  }
+});
+
+app.get('/api/consistency/materials', async (req, res) => {
+  try {
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(req.query.limit) || 100));
+    const rows = await supabaseFetch(`material_raw?select=*&order=created_at.desc,id.desc&limit=${pageSize}&offset=${(page - 1) * pageSize}`);
+    return apiResponse(res, 200, true, { rows: rows || [], page, pageSize });
+  } catch (error) { return apiResponse(res, 500, false, null, error.message); }
+});
 
 app.get('/api/status', async (req, res) => {
   try {
@@ -236,7 +295,7 @@ app.get('/api/materials', async (req, res) => {
       prefer: 'count=exact'
     });
 
-    return apiResponse(res, 200, true, rows || [], 'Daftar material berhasil dimuat.');
+    return apiResponse(res, 200, true, { rows: rows || [], page, pageSize: limit }, 'Daftar material berhasil dimuat.');
   } catch (error) {
     return apiResponse(res, 500, false, null, error.message);
   }
@@ -389,7 +448,7 @@ app.post('/api/duplicates/decision', async (req, res) => {
     const { candidateId, decision, selectedMaster, notes, reviewerName } = req.body;
     if (!candidateId) return apiResponse(res, 400, false, null, 'Candidate ID wajib diisi.');
 
-    const reviewer = reviewerName || 'admin';
+    const reviewer = req.actor.full_name || req.actor.username;
     const reviewedAt = new Date().toISOString();
     const encodedId = encodeURIComponent(candidateId);
 
@@ -548,12 +607,14 @@ app.post('/api/auth/login', async (req, res) => {
     } catch (_) {}
 
     const token = crypto.randomBytes(32).toString('hex');
+    for (const [key, session] of sessions) if (session.expiresAt <= Date.now()) sessions.delete(key);
+    sessions.set(token, { id: user.id, expiresAt: Date.now() + 21600000 });
     const userData = {
       id: user.id,
       username: user.username,
       full_name: user.full_name,
       role: user.role,
-      permissions: permissions || {},
+      permissions: AccessPolicy.normalize(user.role, permissions || {}),
       token
     };
 
@@ -617,15 +678,20 @@ app.get('/api/users', async (req, res) => {
 
 app.post('/api/users/permissions', async (req, res) => {
   try {
-    const { roleKey, allowedMenus, permissionsObj } = req.body;
+    const { roleKey, allowedMenus } = req.body;
+    if (!['GUEST', 'OPERATOR'].includes(roleKey)) return apiResponse(res, 400, false, null, 'Role ini tidak dapat diubah.');
+    const permissionsObj = AccessPolicy.normalize(roleKey, { ...req.body.permissionsObj, allowed_menus: allowedMenus });
     if (!roleKey) return apiResponse(res, 400, false, null, 'Role key wajib diisi.');
 
     const payload = {
       role: roleKey,
-      allowed_menus: Array.isArray(allowedMenus) ? allowedMenus : [],
+      allowed_menus: permissionsObj.allowed_menus,
       can_upload: Boolean(permissionsObj?.can_upload),
       can_run_ai: Boolean(permissionsObj?.can_run_ai),
       can_merge: Boolean(permissionsObj?.can_merge),
+      can_review: Boolean(permissionsObj?.can_review),
+      can_run_consistency: Boolean(permissionsObj?.can_run_consistency),
+      can_export_consistency: Boolean(permissionsObj?.can_export_consistency),
       can_manage_settings: Boolean(permissionsObj?.can_manage_settings),
       updated_at: new Date().toISOString()
     };
@@ -719,7 +785,7 @@ app.delete('/api/users/:id', async (req, res) => {
 // SERVE STATIC FRONTEND
 // =============================================================================
 const frontendDir = path.resolve(__dirname, '..');
-app.use(express.static(frontendDir));
+['js', 'css', 'templates'].forEach(dir => app.use('/' + dir, express.static(path.join(frontendDir, dir))));
 
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api')) return next();

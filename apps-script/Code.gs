@@ -11,6 +11,64 @@ const MAX_UPLOAD_ROWS = 100000;
 const DEFAULT_SUPABASE_URL = 'https://tayybadwfypmedjixemd.supabase.co';
 
 /**
+ * STANDAR FORMAT RESPONSE
+ */
+function response_(success, data, message) {
+  return {
+    success: Boolean(success),
+    data: data !== undefined ? data : null,
+    message: String(message || '')
+  };
+}
+
+// Pastikan AccessPolicy tersedia bahkan jika AccessPolicy.gs belum dibuat di Apps Script editor
+if (typeof AccessPolicy === 'undefined') {
+  var AccessPolicy = (() => {
+    const menus = ['dashboard', 'upload', 'materials', 'duplicates', 'similarity', 'consistency', 'reports', 'users', 'settings'];
+    const flags = ['can_upload', 'can_run_ai', 'can_review', 'can_merge', 'can_manage_settings', 'can_run_consistency', 'can_export_consistency'];
+    function normalize(role, raw = {}) {
+      role = String(role || 'GUEST').toUpperCase();
+      let allowed = raw.allowed_menus;
+      if (typeof allowed === 'string') { try { allowed = JSON.parse(allowed); } catch (_) { allowed = []; } }
+      const result = { role, allowed_menus: Array.isArray(allowed) ? allowed.filter(x => menus.includes(x)) : [] };
+      flags.forEach(key => { result[key] = raw[key] === true; });
+      if (role === 'ADMIN') {
+        result.allowed_menus = menus.slice();
+        flags.forEach(key => { result[key] = true; });
+      } else {
+        result.allowed_menus = result.allowed_menus.filter(x => x !== 'users');
+        if (role === 'GUEST') {
+          result.allowed_menus = result.allowed_menus.filter(x => !['upload', 'duplicates'].includes(x));
+          flags.forEach(key => { result[key] = false; });
+        }
+      }
+      return result;
+    }
+    const rules = {
+      getDashboardData: ['dashboard'], getDashboardSummary: ['dashboard'],
+      getMaterials: ['materials'], getMaterialMaster: ['materials'],
+      getConsistencyMaterials: ['consistency', 'can_run_consistency'],
+      authorizeConsistencyExport: ['consistency', 'can_export_consistency'],
+      uploadMaterials: ['upload', 'can_upload'], uploadMasterData: ['upload', 'can_upload'],
+      getUploadHistory: ['upload'], normalizeMaterial: ['materials', 'can_upload'],
+      runAICleansingAnalysis: ['duplicates', 'can_run_ai'], runAiCleansingAnalysis: ['duplicates', 'can_run_ai'],
+      getDuplicateCandidates: ['duplicates'], getDuplicates: ['duplicates'],
+      getSimilarMaterials: ['similarity'], getApprovedDuplicatesReport: ['reports'],
+      setupSupabaseConfig: ['settings', 'can_manage_settings'], testSupabaseConnection: ['settings', 'can_manage_settings'],
+      getUserManagementData: ['users'], saveRolePermissions: ['users'], saveAppUser: ['users'], deleteAppUser: ['users']
+    };
+    function allows(role, raw, action, args = []) {
+      if (['loginUser', 'getAppStatus', 'getSystemAccessControl', 'getSession', 'logoutUser'].includes(action)) return true;
+      const permission = normalize(role, raw);
+      const rule = action === 'saveDuplicateDecision'
+        ? ['duplicates', args[1] === 'MERGE_AND_OBSOLETE' ? 'can_merge' : 'can_review'] : rules[action];
+      return Boolean(rule && permission.allowed_menus.includes(rule[0]) && (!rule[1] || permission[rule[1]]));
+    }
+    return { menus, flags, normalize, allows };
+  })();
+}
+
+/**
  * ENTRY POINT WEB APP & REST API (GET)
  */
 function doGet(e) {
@@ -34,12 +92,12 @@ function doPost(e) {
     }
     const action = payload.action || (e && e.parameter && e.parameter.action);
     const args = Array.isArray(payload.args) ? payload.args : [];
-    return handleApiRequest_(action, args);
+    return handleApiRequest_(action, args, payload.token);
   } catch (err) {
     return jsonResponse_({
       success: false,
       data: null,
-      message: 'GAS API Parse Error: ' + err.message
+      message: 'GAS API Error: ' + (err && err.message ? err.message : String(err))
     });
   }
 }
@@ -50,78 +108,110 @@ function jsonResponse_(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-function handleApiRequest_(action, args) {
+function handleApiRequest_(action, args, token) {
   try {
+    return jsonResponse_(apiRequest(action, args, token));
+  } catch (err) {
+    return jsonResponse_({
+      success: false,
+      data: null,
+      message: err && err.message ? err.message : String(err)
+    });
+  }
+}
+
+// The only remotely callable business API, including google.script.run clients.
+function apiRequest(action, args, token) {
+  args = Array.isArray(args) ? args.slice() : [];
+  try {
+    if (action === 'logoutUser') {
+      if (token) CacheService.getScriptCache().remove('session:' + token);
+      return response_(true, null, 'Sesi diakhiri.');
+    }
+    const actor = resolveActor_(action === 'loginUser' ? '' : token);
+    if (!AccessPolicy.allows(actor.role, actor.permissions, action, args)) {
+      throw new Error('Akses ditolak. Anda tidak memiliki izin untuk tindakan ini.');
+    }
+    if (action === 'getSession') return response_(true, actor, 'Sesi diverifikasi.');
+    if (action === 'authorizeConsistencyExport') return response_(true, null, 'Ekspor diizinkan.');
+    if (action === 'saveDuplicateDecision') args[4] = actor.full_name || actor.username;
     let res;
     switch (action) {
       case 'getAppStatus':
-        res = getAppStatus();
+        res = getAppStatus_();
         break;
       case 'setupSupabaseConfig':
-        res = setupSupabaseConfig(args[0], args[1]);
+        res = setupSupabaseConfig_(args[0], args[1]);
         break;
       case 'testSupabaseConnection':
-        res = testSupabaseConnection();
+        res = testSupabaseConnection_();
         break;
       case 'getDashboardData':
       case 'getDashboardSummary':
-        res = getDashboardData();
+        res = getDashboardData_();
+        break;
+      case 'getConsistencyMaterials':
+        res = getMaterials_(args[0], args[1], '', true);
         break;
       case 'getMaterials':
       case 'getMaterialMaster':
-        res = getMaterials(args[0], args[1], args[2]);
+        res = getMaterials_(args[0], args[1], args[2]);
         break;
       case 'uploadMaterials':
       case 'uploadMasterData':
-        res = uploadMaterials(args[0], args[1]);
+        res = uploadMaterials_(args[0], args[1]);
         break;
       case 'normalizeMaterial':
-        res = normalizeMaterial(args[0]);
+        res = normalizeMaterial_(args[0]);
         break;
       case 'getUploadHistory':
-        res = getUploadHistory(args[0]);
+        res = getUploadHistory_(args[0]);
         break;
       case 'runAICleansingAnalysis':
       case 'runAiCleansingAnalysis':
-        res = runAICleansingAnalysis(args[0], args[1]);
+        res = runAICleansingAnalysis_(args[0], args[1]);
         break;
       case 'getDuplicateCandidates':
       case 'getDuplicates':
-        res = getDuplicateCandidates(args[0]);
+        res = getDuplicateCandidates_(args[0]);
         break;
       case 'saveDuplicateDecision':
-        res = saveDuplicateDecision(args[0], args[1], args[2], args[3], args[4]);
+        res = saveDuplicateDecision_(args[0], args[1], args[2], args[3], args[4]);
         break;
       case 'getSimilarMaterials':
-        res = getSimilarMaterials(args[0]);
+        res = getSimilarMaterials_(args[0]);
         break;
       case 'loginUser':
-        res = loginUser(args[0], args[1]);
+        res = loginUser_(args[0], args[1]);
         break;
       case 'getSystemAccessControl':
-        res = getSystemAccessControl();
+        res = getSystemAccessControl_();
         break;
       case 'getUserManagementData':
-        res = getUserManagementData();
+        res = getUserManagementData_();
         break;
       case 'saveRolePermissions':
-        res = saveRolePermissions(args[0], args[1], args[2]);
+        res = saveRolePermissions_(args[0], args[1], args[2]);
         break;
       case 'saveAppUser':
-        res = saveAppUser(args[0]);
+        res = saveAppUser_(args[0]);
         break;
       case 'deleteAppUser':
-        res = deleteAppUser(args[0], args[1]);
+        res = deleteAppUser_(args[0], args[1]);
         break;
       case 'getApprovedDuplicatesReport':
-        res = getApprovedDuplicatesReport(args[0]);
+        res = getApprovedDuplicatesReport_(args[0]);
         break;
       default:
         res = response_(false, null, 'Action tidak dikenal: ' + action);
     }
-    return jsonResponse_(res);
+    return res;
   } catch (err) {
-    return jsonResponse_(response_(false, null, err.message));
+    return {
+      success: false,
+      data: null,
+      message: err && err.message ? err.message : String(err)
+    };
   }
 }
 
@@ -133,26 +223,15 @@ function include(filename) {
 }
 
 /**
- * STANDAR FORMAT RESPONSE
- */
-function response_(success, data, message) {
-  return {
-    success: Boolean(success),
-    data: data !== undefined ? data : null,
-    message: String(message || '')
-  };
-}
-
-/**
  * FUNGSI SETUP KONEKSI DARI SCRIPT EDITOR (Jalankan sekali)
  * Masukkan service role key (secret) dari Dashboard Supabase:
  * Settings -> API -> Project API keys -> service_role (secret)
  */
-function firstTimeSetup() {
+function firstTimeSetup_() {
   const projectUrl = DEFAULT_SUPABASE_URL;
   const serviceRoleKey = 'PASTE_SERVICE_ROLE_KEY_DISINI'; // Ganti dengan key asli Anda
   
-  const res = setupSupabaseConfig(projectUrl, serviceRoleKey);
+  const res = setupSupabaseConfig_(projectUrl, serviceRoleKey);
   Logger.log(JSON.stringify(res));
   return res;
 }
@@ -160,7 +239,7 @@ function firstTimeSetup() {
 /**
  * Simpan konfigurasi Supabase ke PropertiesService (Aman, tidak terekspos ke frontend)
  */
-function setupSupabaseConfig(projectUrl, serviceRoleKey) {
+function setupSupabaseConfig_(projectUrl, serviceRoleKey) {
   try {
     const url = String(projectUrl || '').trim().replace(/\/+$/, '');
     const key = String(serviceRoleKey || '').trim();
@@ -179,7 +258,7 @@ function setupSupabaseConfig(projectUrl, serviceRoleKey) {
     }, false);
 
     // Uji koneksi langsung
-    const test = testSupabaseConnection();
+    const test = testSupabaseConnection_();
     if (!test.success) {
       return response_(false, null, 'Konfigurasi tersimpan, namun koneksi gagal: ' + test.message);
     }
@@ -193,7 +272,7 @@ function setupSupabaseConfig(projectUrl, serviceRoleKey) {
 /**
  * Uji konektivitas langsung ke Supabase REST API
  */
-function testSupabaseConnection() {
+function testSupabaseConnection_() {
   try {
     const cfg = getSupabaseConfig_();
     const res = UrlFetchApp.fetch(cfg.url + '/rest/v1/', {
@@ -219,7 +298,7 @@ function testSupabaseConnection() {
 /**
  * Ambil status aplikasi & verifikasi konfigurasi untuk Frontend
  */
-function getAppStatus() {
+function getAppStatus_() {
   try {
     const props = PropertiesService.getScriptProperties();
     const url = props.getProperty('SUPABASE_URL') || DEFAULT_SUPABASE_URL;
@@ -267,7 +346,7 @@ function getSupabaseConfig_() {
   const key = props.getProperty('SUPABASE_SERVICE_KEY');
 
   if (!url || !key || key === 'PASTE_SERVICE_ROLE_KEY_DISINI') {
-    throw new Error('Supabase belum dikonfigurasi. Atur koneksi melalui menu Pengaturan atau jalankan firstTimeSetup().');
+    throw new Error('Supabase belum dikonfigurasi. Atur koneksi melalui menu Pengaturan atau jalankan firstTimeSetup_() dari editor Apps Script.');
   }
   return { url: url.replace(/\/+$/, ''), key: key };
 }
@@ -313,7 +392,7 @@ function supabaseRequest_(path, method, payload, extraHeaders) {
 /**
  * DASHBOARD ANALYTICS
  */
-function getDashboardData() {
+function getDashboardData_() {
   try {
     let summary = {};
     try {
@@ -419,18 +498,19 @@ function calculateDataQuality_() {
 /**
  * MATERIAL MASTER & PAGING
  */
-function getMaterials(page, pageSize, search) {
+function getMaterials_(page, pageSize, search, catalog) {
   try {
     page = Math.max(1, Number(page) || 1);
     pageSize = Math.min(100, Math.max(10, Number(pageSize) || 25));
     const offset = (page - 1) * pageSize;
 
     let path = 'material_raw?select=id,material_code,material_description,manufacturer,part_number,material_group,base_uom,stock_qty,stock_value,created_at';
+    if (catalog) path = 'material_raw?select=*';
     if (search) {
       const safe = String(search).replace(/[,%()]/g, ' ').trim();
       if (safe) path += '&or=(material_code.ilike.*' + encodeURIComponent(safe) + '*,material_description.ilike.*' + encodeURIComponent(safe) + '*,part_number.ilike.*' + encodeURIComponent(safe) + '*)';
     }
-    path += '&order=created_at.desc&limit=' + pageSize + '&offset=' + offset;
+    path += '&order=created_at.desc,id.desc&limit=' + pageSize + '&offset=' + offset;
 
     const rows = supabaseRequest_(path, 'get');
     return response_(true, { rows: rows || [], page: page, pageSize: pageSize }, 'Material berhasil dimuat.');
@@ -442,7 +522,7 @@ function getMaterials(page, pageSize, search) {
 /**
  * UPLOAD MATERIAL MASTER
  */
-function uploadMaterials(records, fileName) {
+function uploadMaterials_(records, fileName) {
   const lock = LockService.getScriptLock();
   try {
     lock.waitLock(30000);
@@ -529,7 +609,7 @@ function uploadMaterials(records, fileName) {
 /**
  * NORMALISASI MATERIAL TUNGGAL
  */
-function normalizeMaterial(materialId) {
+function normalizeMaterial_(materialId) {
   try {
     const row = supabaseRequest_('material_raw?id=eq.' + materialId + '&select=*', 'get');
     if (!row || !row.length) throw new Error('Material tidak ditemukan.');
@@ -556,7 +636,7 @@ function normalizeMaterial(materialId) {
  * JALANKAN AI CLEANSING & RATIONALIZATION ENGINE
  * Memanggil fungsi RPC PostgreSQL run_material_cleansing_ai di Supabase
  */
-function runAICleansingAnalysis(minDupScore, minSimScore) {
+function runAICleansingAnalysis_(minDupScore, minSimScore) {
   try {
     const cfg = getSupabaseConfig_();
     const payload = {
@@ -594,7 +674,7 @@ function runAICleansingAnalysis(minDupScore, minSimScore) {
 /**
  * KANDIDAT DUPLIKASI
  */
-function getDuplicateCandidates(limit) {
+function getDuplicateCandidates_(limit) {
   try {
     limit = Math.min(300, Math.max(10, Number(limit) || 100));
     const analyses = supabaseRequest_('duplicate_analysis?select=*&order=duplicate_score.desc&limit=' + limit, 'get') || [];
@@ -607,7 +687,7 @@ function getDuplicateCandidates(limit) {
 /**
  * MATERIAL SERUPA (SIMILARITY)
  */
-function getSimilarMaterials(limit) {
+function getSimilarMaterials_(limit) {
   try {
     limit = Math.min(300, Math.max(10, Number(limit) || 100));
     const rows = supabaseRequest_('similar_material?select=*&order=similarity_score.desc&limit=' + limit, 'get') || [];
@@ -620,7 +700,7 @@ function getSimilarMaterials(limit) {
 /**
  * SIMPAN KEPUTUSAN REVIEW DUPLIKAT (MERGE / REJECT / APPROVE)
  */
-function saveDuplicateDecision(candidateId, decision, masterCode, notes, reviewerName) {
+function saveDuplicateDecision_(candidateId, decision, masterCode, notes, reviewerName) {
   const lock = LockService.getScriptLock();
   try {
     lock.waitLock(10000);
@@ -688,7 +768,7 @@ function saveDuplicateDecision(candidateId, decision, masterCode, notes, reviewe
 /**
  * MENGAMBIL LAPORAN EFISIENSI & APPROVED DUPLICATES
  */
-function getApprovedDuplicatesReport(statusFilter) {
+function getApprovedDuplicatesReport_(statusFilter) {
   try {
     let query = 'duplicate_analysis?order=potential_saving.desc,duplicate_score.desc&limit=500';
     if (statusFilter === 'ALL_APPROVED') {
@@ -735,7 +815,7 @@ function getApprovedDuplicatesReport(statusFilter) {
 /**
  * SIMPAN KEPUTUSAN REVIEW DUPLIKAT
  */
-function saveReviewDecision(queueId, decision, note) {
+function saveReviewDecision_(queueId, decision, note) {
   const lock = LockService.getScriptLock();
   try {
     lock.waitLock(10000);
@@ -767,7 +847,7 @@ function saveReviewDecision(queueId, decision, note) {
 /**
  * RIWAYAT UPLOAD
  */
-function getUploadHistory(limit) {
+function getUploadHistory_(limit) {
   try {
     const limitNum = Math.min(100, Number(limit) || 20);
     let rows;
@@ -831,11 +911,14 @@ function numberOrZero_(v) {
 const DEFAULT_GUEST_PERMISSIONS = {
   role: 'GUEST',
   role_name: 'Pengunjung (Tanpa Login)',
-  allowed_menus: ['dashboard', 'materials', 'similarity'],
+  allowed_menus: ['dashboard', 'materials', 'similarity', 'consistency', 'reports', 'settings'],
   can_upload: false,
   can_run_ai: false,
   can_merge: false,
-  can_manage_settings: false
+  can_manage_settings: false,
+  can_review: false,
+  can_run_consistency: false,
+  can_export_consistency: false
 };
 
 const DEFAULT_ADMIN_PERMISSIONS = {
@@ -856,10 +939,10 @@ function hashPassword_(pass) {
 /**
  * Verifikasi Login Pengguna / Admin
  */
-function loginUser(username, password) {
+function loginUser_(username, password) {
   try {
     const userClean = cleanText_(username).toLowerCase();
-    const passClean = String(password || '').trim();
+    const passClean = String(password || '');
     if (!userClean) throw new Error('Username wajib diisi.');
     if (!passClean) throw new Error('Password wajib diisi.');
 
@@ -874,21 +957,6 @@ function loginUser(username, password) {
       }
     } catch (_) {}
 
-    // 2. Fallback: Cek default Admin jika tabel belum di-setup di Supabase
-    if (!matchedUser && userClean === 'admin') {
-      const props = PropertiesService.getScriptProperties();
-      const storedHash = props.getProperty('ADMIN_PASSWORD_HASH') || hashPassword_('admin123');
-      if (hashInput === storedHash) {
-        matchedUser = {
-          id: 1,
-          username: 'admin',
-          full_name: 'System Administrator',
-          role: 'ADMIN',
-          is_active: true
-        };
-      }
-    }
-
     if (!matchedUser) {
       throw new Error('Username atau password salah.');
     }
@@ -900,7 +968,7 @@ function loginUser(username, password) {
     }
 
     // Ambil hak akses peran
-    let permissions = DEFAULT_ADMIN_PERMISSIONS;
+    let permissions = {};
     try {
       const permRows = supabaseRequest_('app_role_permissions?role=eq.' + encodeURIComponent(matchedUser.role), 'get');
       if (permRows && permRows.length > 0) {
@@ -911,6 +979,10 @@ function loginUser(username, password) {
       }
     } catch (_) {}
 
+    permissions = AccessPolicy.normalize(matchedUser.role, permissions);
+    const token = Utilities.getUuid() + Utilities.getUuid();
+    CacheService.getScriptCache().put('session:' + token, JSON.stringify({ id: matchedUser.id, expiresAt: Date.now() + 21600000 }), 21600);
+
     writeAudit_('AUTH', 'LOGIN_SUCCESS', matchedUser.username, 'Login sukses sebagai ' + matchedUser.role);
 
     return response_(true, {
@@ -919,7 +991,8 @@ function loginUser(username, password) {
       fullName: matchedUser.full_name || matchedUser.username,
       full_name: matchedUser.full_name || matchedUser.username,
       role: matchedUser.role,
-      permissions: permissions
+      permissions: permissions,
+      token: token
     }, 'Login berhasil. Selamat datang, ' + (matchedUser.full_name || matchedUser.username) + '!');
   } catch (error) {
     writeAudit_('AUTH', 'LOGIN_FAILED', username, error.message);
@@ -930,7 +1003,7 @@ function loginUser(username, password) {
 /**
  * Mengambil konfigurasi hak akses sistem (termasuk untuk mode Guest)
  */
-function getSystemAccessControl() {
+function getSystemAccessControl_() {
   try {
     let roles = [];
     try {
@@ -962,7 +1035,7 @@ function getSystemAccessControl() {
 /**
  * Mengambil data manajemen pengguna & hak akses (Khusus Admin)
  */
-function getUserManagementData() {
+function getUserManagementData_() {
   try {
     let users = [];
     let roles = [];
@@ -995,10 +1068,14 @@ function getUserManagementData() {
 /**
  * Simpan / Update Pengaturan Hak Akses Peran
  */
-function saveRolePermissions(roleKey, allowedMenus, permissionsObj) {
+function saveRolePermissions_(roleKey, allowedMenus, permissionsObj) {
   try {
     if (!roleKey) throw new Error('Role key wajib diisi.');
-    const menus = Array.isArray(allowedMenus) ? allowedMenus : [];
+    if (!['GUEST', 'OPERATOR', 'ADMIN'].includes(roleKey)) throw new Error('Role tidak dikenal.');
+    if (roleKey === 'ADMIN') throw new Error('Administrator memiliki akses penuh dan tidak dapat dibatasi.');
+    const effective = AccessPolicy.normalize(roleKey, Object.assign({}, permissionsObj, { allowed_menus: allowedMenus }));
+    const menus = effective.allowed_menus;
+    permissionsObj = effective;
 
     const payload = {
       role: roleKey,
@@ -1006,6 +1083,9 @@ function saveRolePermissions(roleKey, allowedMenus, permissionsObj) {
       can_upload: Boolean(permissionsObj?.can_upload),
       can_run_ai: Boolean(permissionsObj?.can_run_ai),
       can_merge: Boolean(permissionsObj?.can_merge),
+      can_review: Boolean(permissionsObj?.can_review),
+      can_run_consistency: Boolean(permissionsObj?.can_run_consistency),
+      can_export_consistency: Boolean(permissionsObj?.can_export_consistency),
       can_manage_settings: Boolean(permissionsObj?.can_manage_settings),
       updated_at: new Date().toISOString()
     };
@@ -1021,7 +1101,7 @@ function saveRolePermissions(roleKey, allowedMenus, permissionsObj) {
 /**
  * Simpan / Tambah Pengguna Baru (Admin)
  */
-function saveAppUser(userData) {
+function saveAppUser_(userData) {
   try {
     if (!userData || !userData.username) throw new Error('Username wajib diisi.');
     const uName = cleanText_(userData.username).toLowerCase();
@@ -1062,7 +1142,7 @@ function saveAppUser(userData) {
 /**
  * Hapus Pengguna (Admin)
  */
-function deleteAppUser(userId, username) {
+function deleteAppUser_(userId, username) {
   try {
     if (String(username).toLowerCase() === 'admin') {
       throw new Error('Akun Administrator utama tidak boleh dihapus.');
@@ -1073,4 +1153,22 @@ function deleteAppUser(userId, username) {
   } catch (error) {
     return response_(false, null, error.message);
   }
+}
+
+function resolveActor_(token) {
+  if (!token) {
+    const permissions = getSystemAccessControl_().data.guestPermissions;
+    return { role: 'GUEST', username: 'guest', full_name: 'Pengunjung', permissions: AccessPolicy.normalize('GUEST', permissions) };
+  }
+  const saved = CacheService.getScriptCache().get('session:' + token);
+  if (!saved) throw new Error('Sesi berakhir. Silakan login kembali.');
+  const session = JSON.parse(saved);
+  if (session.expiresAt <= Date.now()) throw new Error('Sesi berakhir. Silakan login kembali.');
+  const users = supabaseRequest_('app_users?id=eq.' + encodeURIComponent(session.id) + '&is_active=eq.true&select=id,username,full_name,role&limit=1', 'get');
+  if (!users || !users.length) throw new Error('Akun tidak aktif. Silakan login kembali.');
+  const user = users[0];
+  const rows = supabaseRequest_('app_role_permissions?role=eq.' + encodeURIComponent(user.role) + '&limit=1', 'get');
+  user.permissions = AccessPolicy.normalize(user.role, rows && rows[0] || {});
+  user.token = token;
+  return user;
 }

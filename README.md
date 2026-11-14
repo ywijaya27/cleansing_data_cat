@@ -1,5 +1,7 @@
 # 🚀 AI Material Master Cleansing, Duplicate Review & Similarity System
 
+Konfigurasi deployment saat ini memakai frontend Vercel dan backend Google Apps Script. Untuk pembaruan role dan Cek Konsistensi, ikuti [DEPLOY_RBAC.md](DEPLOY_RBAC.md), termasuk migrasi SQL sebelum deployment. Penjelasan arsitektur Node.js di bawah tetap tersedia sebagai alternatif.
+
 Sistem cerdas manajemen katalog material (*Material Master Data*) berbasis AI untuk standarisasi deskripsi, deteksi duplikasi barang, pencocokan kesamaan (*similarity cross-reference*), dan rasionalisasi inventori dengan arsitektur modern terpisah (**Decoupled Frontend + REST API Backend + Supabase PostgreSQL**).
 
 ---

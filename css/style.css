@@ -252,6 +252,13 @@ body {
   font-weight: 600;
 }
 
+.user-chip.operator {
+  background: rgba(59, 130, 246, 0.15);
+  border: 1px solid #3b82f6;
+  color: #3b82f6;
+  font-weight: 600;
+}
+
 .nav-item.locked {
   opacity: 0.55;
   cursor: not-allowed;
