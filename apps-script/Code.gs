@@ -169,7 +169,7 @@ function apiRequest(action, args, token) {
         break;
       case 'runAICleansingAnalysis':
       case 'runAiCleansingAnalysis':
-        res = runAICleansingAnalysis_(args[0], args[1]);
+        res = runAICleansingAnalysis_(args[0], args[1], args[2]);
         break;
       case 'getDuplicateCandidates':
       case 'getDuplicates':
@@ -636,12 +636,13 @@ function normalizeMaterial_(materialId) {
  * JALANKAN AI CLEANSING & RATIONALIZATION ENGINE
  * Memanggil fungsi RPC PostgreSQL run_material_cleansing_ai di Supabase
  */
-function runAICleansingAnalysis_(minDupScore, minSimScore) {
+function runAICleansingAnalysis_(minDupScore, minSimScore, batchLimit) {
   try {
     const cfg = getSupabaseConfig_();
     const payload = {
       p_min_duplicate_score: Number(minDupScore) || 75,
-      p_min_similarity_score: Number(minSimScore) || 60
+      p_min_similarity_score: Number(minSimScore) || 60,
+      p_limit: batchLimit !== undefined && batchLimit !== null ? Number(batchLimit) : 1000
     };
 
     const res = UrlFetchApp.fetch(cfg.url + '/rest/v1/rpc/run_material_cleansing_ai', {

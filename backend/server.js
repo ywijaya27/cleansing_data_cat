@@ -442,10 +442,14 @@ app.get('/api/upload/history', async (req, res) => {
 
 app.post('/api/duplicates/run-ai', async (req, res) => {
   try {
-    // Panggil stored procedure / RPC run_ai_duplicate_analysis di Supabase
-    const result = await supabaseFetch('rpc/run_ai_duplicate_analysis', {
+    const { minDup = 75, minSim = 60, limit = 1000 } = req.body || {};
+    const result = await supabaseFetch('rpc/run_material_cleansing_ai', {
       method: 'POST',
-      body: {}
+      body: {
+        p_min_duplicate_score: Number(minDup) || 75,
+        p_min_similarity_score: Number(minSim) || 60,
+        p_limit: limit !== undefined && limit !== null ? Number(limit) : 1000
+      }
     });
 
     return apiResponse(res, 200, true, result, 'Analisis AI Duplicate & Similarity selesai.');

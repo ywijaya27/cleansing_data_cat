@@ -495,10 +495,14 @@
 
       case 'runAICleansingAnalysis':
       case 'runAiCleansingAnalysis': {
-        const [minDup = 75, minSim = 60] = args;
+        const [minDup = 75, minSim = 60, batchLimit = 1000] = args;
         const res = await supabaseRequest('rpc/run_material_cleansing_ai', {
           method: 'POST',
-          body: { p_min_duplicate_score: Number(minDup) || 75, p_min_similarity_score: Number(minSim) || 60 }
+          body: {
+            p_min_duplicate_score: Number(minDup) || 75,
+            p_min_similarity_score: Number(minSim) || 60,
+            p_limit: batchLimit !== undefined && batchLimit !== null ? Number(batchLimit) : 1000
+          }
         });
         return { success: true, data: res, message: (res && res.message) || 'Analisis AI selesai diproses.' };
       }
@@ -734,7 +738,13 @@
         case 'normalizeMaterial': return await backendHttp(`/materials/${encodeURIComponent(args[0])}/normalize`, { method: 'POST', body: JSON.stringify({}) });
         case 'getUploadHistory': return await backendHttp('/upload/history');
         case 'runAICleansingAnalysis':
-        case 'runAiCleansingAnalysis': return await backendHttp('/duplicates/run-ai', { method: 'POST', body: JSON.stringify({}) });
+        case 'runAiCleansingAnalysis': {
+          const [minDup = 75, minSim = 60, batchLimit = 1000] = args;
+          return await backendHttp('/duplicates/run-ai', {
+            method: 'POST',
+            body: JSON.stringify({ minDup, minSim, limit: batchLimit })
+          });
+        }
         case 'getDuplicateCandidates':
         case 'getDuplicates': {
           const limit = typeof args[0] === 'number' ? args[0] : 300;

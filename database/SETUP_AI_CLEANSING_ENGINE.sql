@@ -130,10 +130,11 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 
--- 4. MESIN UTAMA DENGAN INDEXED FAST BLOCKING & EXTENDED TIMEOUT
+-- 4. MESIN UTAMA DENGAN INDEXED FAST BLOCKING, BATCH SLICING & EXTENDED TIMEOUT
 CREATE OR REPLACE FUNCTION public.run_material_cleansing_ai(
     p_min_duplicate_score NUMERIC DEFAULT 75,
-    p_min_similarity_score NUMERIC DEFAULT 60
+    p_min_similarity_score NUMERIC DEFAULT 60,
+    p_limit INT DEFAULT 1000
 )
 RETURNS JSONB 
 SET statement_timeout = '120s'
@@ -141,10 +142,12 @@ SET lock_timeout = '30s'
 AS $$
 DECLARE
     v_total_materials INT;
+    v_processed_count INT := 0;
     v_duplicates_found INT := 0;
     v_similar_found INT := 0;
     v_clusters_count INT := 0;
     v_total_potential_savings NUMERIC := 0;
+    v_effective_limit INT;
 BEGIN
     -- Tingkatkan batas waktu eksekusi lokal dan toleransi lock timeout
     PERFORM set_config('statement_timeout', '120000', true);
@@ -158,34 +161,43 @@ BEGIN
         );
     END IF;
 
+    -- Tentukan limit efektif (jika p_limit <= 0 atau NULL maka proses semua)
+    v_effective_limit := CASE WHEN p_limit IS NOT NULL AND p_limit > 0 THEN p_limit ELSE NULL END;
+
     -- Bersihkan hasil lama dengan DELETE aman (Menghindari ACCESS EXCLUSIVE lock dari TRUNCATE yang memicu lock timeout)
     DELETE FROM public.duplicate_analysis WHERE true;
     DELETE FROM public.similar_material WHERE true;
 
-    -- LANGKAH 1: Buat Temp Table dengan Pra-Kalkulasi Token & Normalisasi
+    -- LANGKAH 1: Buat Temp Table dengan Pra-Kalkulasi Token & Normalisasi (Batch Slicing)
     DROP TABLE IF EXISTS temp_mat_prep;
     CREATE TEMP TABLE temp_mat_prep ON COMMIT DROP AS
     SELECT 
-        id,
-        material_code,
-        material_description,
-        COALESCE(manufacturer, '') AS manufacturer,
-        clean_brand(manufacturer) AS norm_brand,
-        COALESCE(part_number, '') AS part_number,
-        clean_part_number(part_number) AS norm_pn,
-        COALESCE(NULLIF(TRIM(material_group), ''), 'UNCLASSIFIED') AS material_group,
-        COALESCE(base_uom, '') AS base_uom,
-        COALESCE(stock_qty, 0) AS stock_qty,
-        COALESCE(stock_value, 0) AS stock_value,
-        UPPER(NULLIF(SPLIT_PART(TRIM(REGEXP_REPLACE(material_description, '[^A-Za-z0-9 ]', ' ', 'g')), ' ', 1), '')) AS token1,
-        UPPER(NULLIF(SPLIT_PART(TRIM(REGEXP_REPLACE(material_description, '[^A-Za-z0-9 ]', ' ', 'g')), ' ', 2), '')) AS token2,
+        sub.id,
+        sub.material_code,
+        sub.material_description,
+        COALESCE(sub.manufacturer, '') AS manufacturer,
+        clean_brand(sub.manufacturer) AS norm_brand,
+        COALESCE(sub.part_number, '') AS part_number,
+        clean_part_number(sub.part_number) AS norm_pn,
+        COALESCE(NULLIF(TRIM(sub.material_group), ''), 'UNCLASSIFIED') AS material_group,
+        COALESCE(sub.base_uom, '') AS base_uom,
+        COALESCE(sub.stock_qty, 0) AS stock_qty,
+        COALESCE(sub.stock_value, 0) AS stock_value,
+        UPPER(NULLIF(SPLIT_PART(TRIM(REGEXP_REPLACE(sub.material_description, '[^A-Za-z0-9 ]', ' ', 'g')), ' ', 1), '')) AS token1,
+        UPPER(NULLIF(SPLIT_PART(TRIM(REGEXP_REPLACE(sub.material_description, '[^A-Za-z0-9 ]', ' ', 'g')), ' ', 2), '')) AS token2,
         (
-            CASE WHEN material_code IS NOT NULL AND material_code != '' THEN 20 ELSE 0 END +
-            CASE WHEN material_description IS NOT NULL AND LENGTH(material_description) > 10 THEN 30 ELSE 0 END +
-            CASE WHEN manufacturer IS NOT NULL AND manufacturer != '' THEN 25 ELSE 0 END +
-            CASE WHEN part_number IS NOT NULL AND part_number != '' THEN 25 ELSE 0 END
+            CASE WHEN sub.material_code IS NOT NULL AND sub.material_code != '' THEN 20 ELSE 0 END +
+            CASE WHEN sub.material_description IS NOT NULL AND LENGTH(sub.material_description) > 10 THEN 30 ELSE 0 END +
+            CASE WHEN sub.manufacturer IS NOT NULL AND sub.manufacturer != '' THEN 25 ELSE 0 END +
+            CASE WHEN sub.part_number IS NOT NULL AND sub.part_number != '' THEN 25 ELSE 0 END
         ) AS quality_weight
-    FROM public.material_raw;
+    FROM (
+        SELECT * FROM public.material_raw
+        ORDER BY created_at DESC
+        LIMIT v_effective_limit
+    ) sub;
+
+    SELECT COUNT(*) INTO v_processed_count FROM temp_mat_prep;
 
     CREATE INDEX idx_tmp_mat_pn ON temp_mat_prep (norm_pn);
     CREATE INDEX idx_tmp_mat_tok1_tok2 ON temp_mat_prep (token1, token2);
@@ -532,18 +544,30 @@ BEGIN
         'RUN_ANALYSIS',
         'SYSTEM_AI',
         'BATCH-' || TO_CHAR(NOW(), 'YYYYMMDD-HH24MISS'),
-        'Analisis AI selesai untuk ' || v_total_materials || ' material: ' || v_duplicates_found || ' duplikat terdeteksi (' || v_clusters_count || ' cluster), ' || v_similar_found || ' similar items.'
+        'Analisis AI selesai untuk ' || v_processed_count || ' material (dari total ' || v_total_materials || '): ' || v_duplicates_found || ' duplikat terdeteksi (' || v_clusters_count || ' cluster), ' || v_similar_found || ' similar items.'
     );
 
     RETURN jsonb_build_object(
         'success', true,
         'totalMaterials', v_total_materials,
+        'processedMaterials', v_processed_count,
         'duplicatesFound', v_duplicates_found,
         'similarFound', v_similar_found,
         'clustersCount', v_clusters_count,
         'potentialSavings', v_total_potential_savings,
-        'message', 'Analisis AI sukses memproses ' || v_total_materials || ' material: ' || v_duplicates_found || ' duplikat (' || v_clusters_count || ' cluster) dan ' || v_similar_found || ' substitusi alternatif berhasil diidentifikasi.'
+        'message', 'Analisis AI sukses memproses ' || v_processed_count || ' material: ' || v_duplicates_found || ' duplikat (' || v_clusters_count || ' cluster) dan ' || v_similar_found || ' substitusi alternatif berhasil diidentifikasi.'
     );
+END;
+$$ LANGUAGE plpgsql;
+
+-- Overload fallback untuk panggilan 2 argumen
+CREATE OR REPLACE FUNCTION public.run_material_cleansing_ai(
+    p_min_duplicate_score NUMERIC,
+    p_min_similarity_score NUMERIC
+)
+RETURNS JSONB AS $$
+BEGIN
+    RETURN public.run_material_cleansing_ai(p_min_duplicate_score, p_min_similarity_score, 1000);
 END;
 $$ LANGUAGE plpgsql;
 
@@ -551,3 +575,4 @@ $$ LANGUAGE plpgsql;
 GRANT EXECUTE ON FUNCTION public.clean_part_number(TEXT) TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.clean_brand(TEXT) TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.run_material_cleansing_ai(NUMERIC, NUMERIC) TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.run_material_cleansing_ai(NUMERIC, NUMERIC, INT) TO anon, authenticated, service_role;

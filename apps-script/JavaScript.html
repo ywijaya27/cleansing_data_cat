@@ -569,10 +569,14 @@ if (typeof module !== 'undefined') module.exports = AccessPolicy;
 
       case 'runAICleansingAnalysis':
       case 'runAiCleansingAnalysis': {
-        const [minDup = 75, minSim = 60] = args;
+        const [minDup = 75, minSim = 60, batchLimit = 1000] = args;
         const res = await supabaseRequest('rpc/run_material_cleansing_ai', {
           method: 'POST',
-          body: { p_min_duplicate_score: Number(minDup) || 75, p_min_similarity_score: Number(minSim) || 60 }
+          body: {
+            p_min_duplicate_score: Number(minDup) || 75,
+            p_min_similarity_score: Number(minSim) || 60,
+            p_limit: batchLimit !== undefined && batchLimit !== null ? Number(batchLimit) : 1000
+          }
         });
         return { success: true, data: res, message: (res && res.message) || 'Analisis AI selesai diproses.' };
       }
@@ -808,7 +812,13 @@ if (typeof module !== 'undefined') module.exports = AccessPolicy;
         case 'normalizeMaterial': return await backendHttp(`/materials/${encodeURIComponent(args[0])}/normalize`, { method: 'POST', body: JSON.stringify({}) });
         case 'getUploadHistory': return await backendHttp('/upload/history');
         case 'runAICleansingAnalysis':
-        case 'runAiCleansingAnalysis': return await backendHttp('/duplicates/run-ai', { method: 'POST', body: JSON.stringify({}) });
+        case 'runAiCleansingAnalysis': {
+          const [minDup = 75, minSim = 60, batchLimit = 1000] = args;
+          return await backendHttp('/duplicates/run-ai', {
+            method: 'POST',
+            body: JSON.stringify({ minDup, minSim, limit: batchLimit })
+          });
+        }
         case 'getDuplicateCandidates':
         case 'getDuplicates': {
           const limit = typeof args[0] === 'number' ? args[0] : 300;
@@ -6721,6 +6731,10 @@ window.CATALOG_RULES = {
     // AI Engine Trigger
     if ($('runAiAnalysisBtn')) $('runAiAnalysisBtn').addEventListener('click', handleRunAiAnalysis);
     if ($('runAiAnalysisBtnSim')) $('runAiAnalysisBtnSim').addEventListener('click', handleRunAiAnalysis);
+    if ($('dupAnalysisBatchLimit') && $('simAnalysisBatchLimit')) {
+      $('dupAnalysisBatchLimit').addEventListener('change', () => { $('simAnalysisBatchLimit').value = $('dupAnalysisBatchLimit').value; });
+      $('simAnalysisBatchLimit').addEventListener('change', () => { $('dupAnalysisBatchLimit').value = $('simAnalysisBatchLimit').value; });
+    }
 
     // Filter Duplicate
     if ($('dupScoreFilter')) $('dupScoreFilter').addEventListener('change', renderDuplicatesTable);
@@ -7313,9 +7327,20 @@ window.CATALOG_RULES = {
   async function handleRunAiAnalysis() {
     if (!requireAction('runAICleansingAnalysis')) return;
     try {
-      showLoading(true, 'Menjalankan AI Duplicate & Similarity Detection Engine...');
-      const r = await callServer('runAICleansingAnalysis', 75, 60);
-      toast(r.message || 'Analisis AI selesai diproses!', 'success');
+      const activeSection = document.querySelector('.content-section.active')?.id || '';
+      let batchLimit = 1000;
+      if (activeSection === 'section-similarity' && $('simAnalysisBatchLimit')) {
+        batchLimit = Number($('simAnalysisBatchLimit').value);
+      } else if ($('dupAnalysisBatchLimit')) {
+        batchLimit = Number($('dupAnalysisBatchLimit').value);
+      }
+      if (isNaN(batchLimit)) batchLimit = 1000;
+
+      const limitLabel = batchLimit > 0 ? `${fmt(batchLimit)} material terbaru` : 'seluruh material database';
+      showLoading(true, `Menjalankan AI Duplicate & Similarity Engine (${limitLabel})...`);
+      const r = await callServer('runAICleansingAnalysis', 75, 60, batchLimit);
+      const msg = r.message || (r.data && r.data.message) || 'Analisis AI selesai diproses!';
+      toast(msg, 'success');
       await Promise.all([
         loadDuplicates(),
         loadSimilarity(),

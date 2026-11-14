@@ -496,6 +496,10 @@
     // AI Engine Trigger
     if ($('runAiAnalysisBtn')) $('runAiAnalysisBtn').addEventListener('click', handleRunAiAnalysis);
     if ($('runAiAnalysisBtnSim')) $('runAiAnalysisBtnSim').addEventListener('click', handleRunAiAnalysis);
+    if ($('dupAnalysisBatchLimit') && $('simAnalysisBatchLimit')) {
+      $('dupAnalysisBatchLimit').addEventListener('change', () => { $('simAnalysisBatchLimit').value = $('dupAnalysisBatchLimit').value; });
+      $('simAnalysisBatchLimit').addEventListener('change', () => { $('dupAnalysisBatchLimit').value = $('simAnalysisBatchLimit').value; });
+    }
 
     // Filter Duplicate
     if ($('dupScoreFilter')) $('dupScoreFilter').addEventListener('change', renderDuplicatesTable);
@@ -1088,9 +1092,20 @@
   async function handleRunAiAnalysis() {
     if (!requireAction('runAICleansingAnalysis')) return;
     try {
-      showLoading(true, 'Menjalankan AI Duplicate & Similarity Detection Engine...');
-      const r = await callServer('runAICleansingAnalysis', 75, 60);
-      toast(r.message || 'Analisis AI selesai diproses!', 'success');
+      const activeSection = document.querySelector('.content-section.active')?.id || '';
+      let batchLimit = 1000;
+      if (activeSection === 'section-similarity' && $('simAnalysisBatchLimit')) {
+        batchLimit = Number($('simAnalysisBatchLimit').value);
+      } else if ($('dupAnalysisBatchLimit')) {
+        batchLimit = Number($('dupAnalysisBatchLimit').value);
+      }
+      if (isNaN(batchLimit)) batchLimit = 1000;
+
+      const limitLabel = batchLimit > 0 ? `${fmt(batchLimit)} material terbaru` : 'seluruh material database';
+      showLoading(true, `Menjalankan AI Duplicate & Similarity Engine (${limitLabel})...`);
+      const r = await callServer('runAICleansingAnalysis', 75, 60, batchLimit);
+      const msg = r.message || (r.data && r.data.message) || 'Analisis AI selesai diproses!';
+      toast(msg, 'success');
       await Promise.all([
         loadDuplicates(),
         loadSimilarity(),
