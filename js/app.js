@@ -379,6 +379,17 @@
     $('materialFile').addEventListener('change', handleFile);
     $('uploadBtn').addEventListener('click', uploadFile);
     if ($('cancelUploadBtn')) $('cancelUploadBtn').addEventListener('click', cancelUploadFile);
+    if ($('enablePreUploadAuditCheck')) {
+      $('enablePreUploadAuditCheck').addEventListener('change', e => {
+        if (state.parsedRows && state.parsedRows.length) {
+          if (e.target.checked) {
+            try { runPreUploadGatekeeperAudit(state.parsedRows); } catch (err) { console.warn('Pra-audit:', err); }
+          } else {
+            if ($('preUploadAuditBox')) $('preUploadAuditBox').classList.add('d-none');
+          }
+        }
+      });
+    }
     $('downloadTemplate').addEventListener('click', downloadTemplate);
 
     // Material Master
@@ -730,7 +741,7 @@
     $('fileInfo').textContent = `${f.name} • ${(f.size / 1024 / 1024).toFixed(2)} MB`;
 
     try {
-      showLoading(true, 'Membaca spreadsheet & menjalankan Pra-Audit Konsistensi...');
+      showLoading(true, 'Membaca data spreadsheet material...');
       const rawRows = await parseSpreadsheet(f);
 
       if (rawRows.length > 100000) throw new Error('Record melebihi batas 100.000 baris.');
@@ -746,13 +757,23 @@
         return item;
       });
 
-      // Jalankan Gatekeeper Consistency Pre-Audit
-      runPreUploadGatekeeperAudit(state.parsedRows);
+      // Jalankan Pra-Audit Konsistensi HANYA jika dicentang oleh user (Non-blocking)
+      const enablePreAudit = $('enablePreUploadAuditCheck') ? $('enablePreUploadAuditCheck').checked : false;
+      if (enablePreAudit) {
+        try {
+          runPreUploadGatekeeperAudit(state.parsedRows);
+        } catch (auditErr) {
+          console.warn('Pra-audit konsistensi dilewati:', auditErr);
+          if ($('preUploadAuditBox')) $('preUploadAuditBox').classList.add('d-none');
+        }
+      } else {
+        if ($('preUploadAuditBox')) $('preUploadAuditBox').classList.add('d-none');
+      }
 
       showLoading(false);
       $('uploadBtn').disabled = false;
       if ($('cancelUploadBtn')) $('cancelUploadBtn').classList.remove('d-none');
-      toast(`${fmt(state.parsedRows.length)} record berhasil dipindai & dinilai konsistensinya.`);
+      toast(`${fmt(state.parsedRows.length)} record berhasil dipindai dan siap di-upload.`);
     } catch (err) {
       showLoading(false);
       $('uploadBtn').disabled = true;

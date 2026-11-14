@@ -188,11 +188,19 @@
           </div>
         </div>
 
-        <div class="d-flex justify-content-end gap-2 mt-3">
-          <button id="cancelUploadBtn" type="button" class="btn btn-sm btn-outline-secondary d-none">
-            <i class="bi bi-x-circle me-1"></i>Batalkan Berkas
-          </button>
-          <button id="uploadBtn" type="button" class="btn btn-accent" disabled><i class="bi bi-cloud-arrow-up"></i> Validasi & Upload ke Database</button>
+        <div class="d-flex justify-content-between align-items-center mt-3 flex-wrap gap-2">
+          <div class="form-check form-switch mb-0">
+            <input class="form-check-input" type="checkbox" id="enablePreUploadAuditCheck">
+            <label class="form-check-label small text-muted" for="enablePreUploadAuditCheck">
+              Jalankan Pra-Audit Konsistensi sebelum upload (Opsional)
+            </label>
+          </div>
+          <div class="d-flex gap-2">
+            <button id="cancelUploadBtn" type="button" class="btn btn-sm btn-outline-secondary d-none">
+              <i class="bi bi-x-circle me-1"></i>Batalkan Berkas
+            </button>
+            <button id="uploadBtn" type="button" class="btn btn-accent" disabled><i class="bi bi-cloud-arrow-up"></i> Validasi & Upload ke Database</button>
+          </div>
         </div>
       </article>
       <article class="panel mt-4">

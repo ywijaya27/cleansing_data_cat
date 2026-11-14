@@ -193,7 +193,7 @@
 
       // Jika segmen adalah Noun itu sendiri
       if (idx === 0 && (upperSeg === nounCandidate || upperSeg.startsWith(nounCandidate + ' '))) {
-        const remaining = upperSeg.replace(new RegExp(`^${nounCandidate}\\s*`), '').trim();
+        const remaining = upperSeg.slice(nounCandidate.length).trim();
         if (remaining) modCandidateSet.add(remaining);
         return;
       }
@@ -493,7 +493,8 @@
     ];
 
     commonTypos.forEach(t => {
-      const regex = new RegExp(`\\b${t.wrong}\\b`, 'i');
+      const safeWrong = String(t.wrong).replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const regex = new RegExp(`\\b${safeWrong}\\b`, 'i');
       if (regex.test(rawText)) {
         score -= 8;
         checkpoints.abbreviations_ok = false;
